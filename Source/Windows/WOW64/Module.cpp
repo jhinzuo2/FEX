@@ -49,6 +49,7 @@ $end_info$
 #include "Windows/Common/SHMStats.h"
 
 #include <cstdint>
+#include <algorithm>
 #include <type_traits>
 #include <atomic>
 #include <mutex>
@@ -56,9 +57,16 @@ $end_info$
 #include <unordered_map>
 #include <ntstatus.h>
 #include <windef.h>
+#include <memoryapi.h>
 #include <winternl.h>
 #include <wine/debug.h>
 #include <wine/unixlib.h>
+#include <cstring>
+#include <cstdlib>
+#include <cctype>
+#include <string_view>
+
+extern "C" void* WINAPI RtlFindExportedRoutineByName(HMODULE, const char*);
 
 namespace ControlBits {
 // When this is unset, a thread can be safely interrupted and have its context recovered
@@ -121,6 +129,349 @@ namespace BridgeInstrs {
   void* Syscall {};
   void* UnixCall {};
 } // namespace BridgeInstrs
+
+struct BNetSyscallIDs {
+  std::optional<uint32_t> NtQuerySystemInformation;
+  std::optional<uint32_t> NtQuerySystemInformationEx;
+  std::optional<uint32_t> NtQueryInformationProcess;
+};
+
+// Cached per-process decision, computed at BTCpuProcessInit time.
+static bool BNetLogEnabled {};
+static bool BNetForceX86Enabled {};
+static bool BNetForceX86TargetProcess {};
+static bool BNetForceX86Ready {};
+static uint32_t BNetLogBudget {400}; // Avoid log storms. Enough to capture detection sequence.
+static BNetSyscallIDs BNetIDs;
+
+template<typename... Args>
+static void BNetLog(const char* Format, Args&&... args) {
+  if (!BNetLogEnabled || BNetLogBudget == 0) {
+    return;
+  }
+
+  --BNetLogBudget;
+  LogMan::Msg::DFmt(Format, std::forward<Args>(args)...);
+}
+
+static const char* BNetProcessInfoClassHint(uint32_t Class) {
+  switch (Class) {
+  case 26:
+    return "ProcessWow64Information(IsWow64Process)";
+  case 88:
+    return "ProcessMachineInformation(IsWow64Process2)";
+  default:
+    return nullptr;
+  }
+}
+
+static const char* BNetSystemInfoClassHint(uint32_t Class) {
+  switch (Class) {
+  case 1:
+    return "SystemCpuInformation(GetSystemInfo/GetNativeSystemInfo)";
+  case 0xB5:
+    return "SystemSupportedProcessorArchitectures(IsWow64Process2/GetNativeSystemInfo)";
+  default:
+    return nullptr;
+  }
+}
+
+static char AsciiToLower(char C) {
+  return static_cast<char>(std::tolower(static_cast<unsigned char>(C)));
+}
+
+static bool EqualsIgnoreCaseASCII(std::string_view LHS, std::string_view RHS) {
+  if (LHS.size() != RHS.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < LHS.size(); ++i) {
+    if (AsciiToLower(LHS[i]) != AsciiToLower(RHS[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool IsBNetForceX86TargetProcess(std::string_view ProcessName) {
+  // Restrict mock scope to Agent-side processes only.
+  return EqualsIgnoreCaseASCII(ProcessName, "agent.exe") || EqualsIgnoreCaseASCII(ProcessName, "agenthelper.exe");
+}
+
+static bool ForceX86PatchSystemInfo(uint32_t Class, uint32_t OutPtr, uint32_t Len) {
+  constexpr uint32_t SystemCpuInformation = 1;
+  if (Class != SystemCpuInformation || !OutPtr || !Len) {
+    return false;
+  }
+
+  // Short process-layout queries should look like x86. Native-layout queries
+  // should look like an AMD64 host, matching an ordinary x86-on-AMD64 process.
+  const uint16_t TargetArch = Len >= 64 ? PROCESSOR_ARCHITECTURE_AMD64 : PROCESSOR_ARCHITECTURE_INTEL;
+  bool Changed {};
+
+  if (Len >= sizeof(SYSTEM_CPU_INFORMATION)) {
+    auto* Out = reinterpret_cast<SYSTEM_CPU_INFORMATION*>(static_cast<uintptr_t>(OutPtr));
+    if (Out->ProcessorArchitecture != TargetArch) {
+      Out->ProcessorArchitecture = TargetArch;
+      Changed = true;
+    }
+  }
+
+  if (Len >= sizeof(uint16_t)) {
+    auto* FirstWord = reinterpret_cast<uint16_t*>(static_cast<uintptr_t>(OutPtr));
+    if (*FirstWord != TargetArch) {
+      *FirstWord = TargetArch;
+      Changed = true;
+    }
+  }
+
+  return Changed;
+}
+
+static bool ForceX86PatchSystemInfoEx(uint32_t Class, uint32_t OutPtr, uint32_t Len) {
+  // SYSTEM_INFORMATION_CLASS::SystemSupportedProcessorArchitectures.
+  constexpr uint32_t SystemSupportedProcessorArchitectures = 0xB5;
+  if (Class != SystemSupportedProcessorArchitectures || !OutPtr || Len < sizeof(uint16_t)) {
+    return false;
+  }
+
+  auto* Words = reinterpret_cast<uint16_t*>(static_cast<uintptr_t>(OutPtr));
+  const size_t WordCount = Len / sizeof(uint16_t);
+  bool Changed {};
+  for (size_t i = 0; i < WordCount; ++i) {
+    switch (Words[i]) {
+    case IMAGE_FILE_MACHINE_ARM64:
+      Words[i] = IMAGE_FILE_MACHINE_AMD64;
+      Changed = true;
+      break;
+    case PROCESSOR_ARCHITECTURE_ARM64:
+      Words[i] = PROCESSOR_ARCHITECTURE_AMD64;
+      Changed = true;
+      break;
+    default:
+      break;
+    }
+  }
+
+  return Changed;
+}
+
+struct NtQuerySystemInformationExArgs {
+  uint32_t Class {};
+  uint32_t InputPtr {};
+  uint32_t InputLen {};
+  uint32_t OutputPtr {};
+  uint32_t OutputLen {};
+};
+
+static bool DecodeNtQuerySystemInformationExMachineProbe(const uint32_t* SysArgs32, NtQuerySystemInformationExArgs* Out) {
+  if (!SysArgs32 || !Out) {
+    return false;
+  }
+
+  // NtQuerySystemInformationEx canonical signature:
+  //   (class, input, input_len, output, output_len, return_len)
+  //
+  // In WOW64 we can also observe variants where one/both pointers are split
+  // to low/high dwords before the scalar lengths:
+  //   (class, in_lo, in_hi, input_len, output, output_len, return_len)
+  //   (class, in_lo, in_hi, input_len, out_lo, out_hi, output_len, return_len)
+  //
+  // Some call sites may add one leading slot before class, so try base 0/1.
+  constexpr uint32_t SystemSupportedProcessorArchitectures = 0xB5;
+  const auto IsLikelyInputLen = [](uint32_t Len) {
+    return Len > 0 && Len <= 0x100;
+  };
+  const auto IsLikelyOutputLen = [](uint32_t Len) {
+    return Len >= sizeof(uint16_t) && Len <= 0x1000;
+  };
+  const auto Fill = [&](uint32_t Base, uint32_t InputPtrIdx, uint32_t InputLenIdx, uint32_t OutputPtrIdx, uint32_t OutputLenIdx) {
+    if (SysArgs32[Base + 0] != SystemSupportedProcessorArchitectures) {
+      return false;
+    }
+
+    const uint32_t InputLen = SysArgs32[Base + InputLenIdx];
+    const uint32_t OutputPtr = SysArgs32[Base + OutputPtrIdx];
+    const uint32_t OutputLen = SysArgs32[Base + OutputLenIdx];
+    if (!IsLikelyInputLen(InputLen) || OutputPtr == 0 || !IsLikelyOutputLen(OutputLen)) {
+      return false;
+    }
+
+    Out->Class = SysArgs32[Base + 0];
+    Out->InputPtr = SysArgs32[Base + InputPtrIdx];
+    Out->InputLen = InputLen;
+    Out->OutputPtr = OutputPtr;
+    Out->OutputLen = OutputLen;
+    return true;
+  };
+
+  for (uint32_t Base = 0; Base <= 1; ++Base) {
+    // class, in, in_len, out, out_len, ret_len
+    if (Fill(Base, 1, 2, 3, 4)) {
+      return true;
+    }
+    // class, in_lo, in_hi, in_len, out, out_len, ret_len
+    if (Fill(Base, 1, 3, 4, 5)) {
+      return true;
+    }
+    // class, in_lo, in_hi, in_len, out_lo, out_hi, out_len, ret_len
+    if (Fill(Base, 1, 3, 4, 6)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool ForceX86WriteProcessMachineTuple(uint32_t OutPtr, uint32_t Len) {
+  if (!OutPtr || Len < sizeof(uint16_t) * 2) {
+    return false;
+  }
+
+  auto* Words = reinterpret_cast<uint16_t*>(static_cast<uintptr_t>(OutPtr));
+  bool Changed {};
+  if (Words[0] != IMAGE_FILE_MACHINE_I386) {
+    Words[0] = IMAGE_FILE_MACHINE_I386;
+    Changed = true;
+  }
+  if (Words[1] != IMAGE_FILE_MACHINE_AMD64) {
+    Words[1] = IMAGE_FILE_MACHINE_AMD64;
+    Changed = true;
+  }
+  return Changed;
+}
+
+static bool IsReadablePtr(const void* Ptr, size_t Size) {
+  if (!Ptr || Size == 0) {
+    return false;
+  }
+
+  MEMORY_BASIC_INFORMATION mbi {};
+  if (VirtualQuery(Ptr, &mbi, sizeof(mbi)) == 0) {
+    return false;
+  }
+
+  if (mbi.State != MEM_COMMIT) {
+    return false;
+  }
+
+  if ((mbi.Protect & PAGE_NOACCESS) || (mbi.Protect & PAGE_GUARD)) {
+    return false;
+  }
+
+  const auto Begin = reinterpret_cast<uintptr_t>(Ptr);
+  const auto End = Begin + Size;
+  const auto RegionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+  return End <= RegionEnd;
+}
+
+static std::optional<uint32_t> ExtractX86SyscallIdAt(const uint8_t* Code, size_t Size) {
+  if (!Code || Size < 5) {
+    return std::nullopt;
+  }
+
+  // Wine's 32-bit ntdll syscall thunks are expected to contain `mov eax, imm32` near the start.
+  // We'll scan a small prefix for robustness across Wine builds.
+  const size_t ScanSize = std::min<size_t>(Size, 32);
+  for (size_t i = 0; i + 4 < ScanSize; ++i) {
+    if (Code[i] == 0xB8 /* mov eax, imm32 */) {
+      uint32_t id {};
+      std::memcpy(&id, Code + i + 1, sizeof(id));
+      return id;
+    }
+  }
+  return std::nullopt;
+}
+
+static const uint8_t* FollowX86JmpThunk(const uint8_t* Code) {
+  if (!Code) {
+    return nullptr;
+  }
+
+  // jmp rel32
+  if (Code[0] == 0xE9) {
+    int32_t Disp {};
+    std::memcpy(&Disp, Code + 1, sizeof(Disp));
+    return Code + 5 + Disp;
+  }
+
+  // jmp rel8
+  if (Code[0] == 0xEB) {
+    int8_t Disp {};
+    std::memcpy(&Disp, Code + 1, sizeof(Disp));
+    return Code + 2 + Disp;
+  }
+
+  return nullptr;
+}
+
+static std::optional<uint32_t> ExtractX86SyscallId(const void* Func) {
+  if (!Func) {
+    return std::nullopt;
+  }
+
+  const auto* Code = reinterpret_cast<const uint8_t*>(Func);
+
+  if (IsReadablePtr(Code, 32)) {
+    if (auto ID = ExtractX86SyscallIdAt(Code, 32)) {
+      return ID;
+    }
+  }
+
+  // Wine stubs may trampoline before the immediate syscall ID load.
+  const auto* JumpTarget = FollowX86JmpThunk(Code);
+  if (!JumpTarget) {
+    return std::nullopt;
+  }
+
+  if (!IsReadablePtr(JumpTarget, 32)) {
+    return std::nullopt;
+  }
+
+  return ExtractX86SyscallIdAt(JumpTarget, 32);
+}
+
+static void InitBNetLoggingAndIDs(HMODULE NtDllNative, uint64_t NtDllX86Handle) {
+  const char* ForceLog = std::getenv("FEX_BNET_DETECT_LOG");
+  const char* ForceX86 = std::getenv("FEX_BNET_FORCE_X86");
+  BNetLogEnabled = ForceLog && ForceLog[0] == '1';
+  BNetForceX86Enabled = ForceX86 && ForceX86[0] == '1';
+  // Avoid log storms while still capturing the architecture probes.
+  BNetLogBudget = 200;
+
+  // In this file we often treat module handles as raw 64-bit values.
+  // HMODULE is effectively the image base in Windows, so this is safe.
+  const auto NtDllX86 = reinterpret_cast<HMODULE>(static_cast<uintptr_t>(NtDllX86Handle));
+  // Always initialize syscall IDs so logging/spoofing can be enabled later without re-init.
+  const auto InitOne = [&](const char* Name, std::optional<uint32_t>* Out) {
+    const void* Sym {};
+    if (NtDllX86) {
+      // GetProcAddress follows the native loader view and does not resolve
+      // exports from Wine's mapped i386 ntdll.  The ntdll helper parses the
+      // supplied PE export table directly and therefore returns the real x86
+      // syscall thunk whose mov-eax immediate we need.
+      Sym = reinterpret_cast<const void*>(RtlFindExportedRoutineByName(NtDllX86, Name));
+    }
+    if (!Sym && NtDllNative) {
+      Sym = reinterpret_cast<const void*>(GetProcAddress(NtDllNative, Name));
+    }
+    *Out = ExtractX86SyscallId(Sym);
+  };
+
+  InitOne("NtQuerySystemInformation", &BNetIDs.NtQuerySystemInformation);
+  InitOne("NtQuerySystemInformationEx", &BNetIDs.NtQuerySystemInformationEx);
+  InitOne("NtQueryInformationProcess", &BNetIDs.NtQueryInformationProcess);
+
+  BNetForceX86Ready = BNetIDs.NtQuerySystemInformation && BNetIDs.NtQuerySystemInformationEx && BNetIDs.NtQueryInformationProcess;
+
+  if (BNetLogEnabled) {
+    BNetLog("FEX_BNET_DETECT: enabled force_x86={} scope_match={} ready={} ids(sys={},sysex={},proc={})",
+            BNetForceX86Enabled ? 1U : 0U, BNetForceX86TargetProcess ? 1U : 0U, BNetForceX86Ready ? 1U : 0U,
+            BNetIDs.NtQuerySystemInformation ? "ok" : "missing", BNetIDs.NtQuerySystemInformationEx ? "ok" : "missing",
+            BNetIDs.NtQueryInformationProcess ? "ok" : "missing");
+  }
+}
 
 fextl::unique_ptr<FEXCore::Context::Context> CTX;
 fextl::unique_ptr<FEX::DummyHandlers::DummySignalDelegator> SignalDelegator;
@@ -450,12 +801,153 @@ public:
       Context::LockJITContext(TLS);
     } else if (Frame->State.rip == (uint64_t)BridgeInstrs::Syscall) {
       const uint64_t EntryRAX = Frame->State.gregs[FEXCore::X86State::REG_RAX];
+      auto* SysArgs32 = reinterpret_cast<uint32_t*>(ReturnRSP + 4);
+
+      // Minimal, targeted syscall logging for Battle.net architecture detection.
+      if (BNetLogEnabled) {
+        auto LogNtQuerySystemInformation = [&]() {
+          if (!BNetIDs.NtQuerySystemInformation || EntryRAX != *BNetIDs.NtQuerySystemInformation) {
+            return;
+          }
+          // (class, out, len, retlen)
+          if (const char* Hint = BNetSystemInfoClassHint(SysArgs32[0])) {
+            BNetLog("FEX_BNET_DETECT: NtQuerySystemInformation(class={} {} out=0x{:08x} len={})", SysArgs32[0], Hint, SysArgs32[1],
+                    SysArgs32[2]);
+          }
+        };
+        auto LogNtQuerySystemInformationEx = [&]() {
+          if (!BNetIDs.NtQuerySystemInformationEx || EntryRAX != *BNetIDs.NtQuerySystemInformationEx) {
+            return;
+          }
+          NtQuerySystemInformationExArgs Args {};
+          if (DecodeNtQuerySystemInformationExMachineProbe(SysArgs32, &Args)) {
+            if (const char* Hint = BNetSystemInfoClassHint(Args.Class)) {
+              BNetLog("FEX_BNET_DETECT: NtQuerySystemInformationEx(class={} {} out=0x{:08x} len={})", Args.Class, Hint, Args.OutputPtr,
+                      Args.OutputLen);
+            }
+            return;
+          }
+
+          // Fallback to canonical field order when not recognized as machine-probe shape.
+          if (const char* Hint = BNetSystemInfoClassHint(SysArgs32[0])) {
+            BNetLog("FEX_BNET_DETECT: NtQuerySystemInformationEx(class={} {} out=0x{:08x} len={})", SysArgs32[0], Hint, SysArgs32[3], SysArgs32[4]);
+          }
+        };
+        auto LogNtQueryInformationProcess = [&]() {
+          if (!BNetIDs.NtQueryInformationProcess || EntryRAX != *BNetIDs.NtQueryInformationProcess) {
+            return;
+          }
+          // (handle, class, out, len, retlen)
+          if (const char* Hint = BNetProcessInfoClassHint(SysArgs32[1])) {
+            BNetLog("FEX_BNET_DETECT: NtQueryInformationProcess(h=0x{:08x} class={} {} out=0x{:08x} len={})", SysArgs32[0], SysArgs32[1], Hint,
+                    SysArgs32[2], SysArgs32[3]);
+          }
+        };
+
+        LogNtQuerySystemInformation();
+        LogNtQuerySystemInformationEx();
+        LogNtQueryInformationProcess();
+      }
 
       const auto TLS = GetTLS();
       Context::UnlockJITContext(TLS);
       Wow64ProcessPendingCrossProcessItems();
       ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(ReturnRSP + 4)));
       Context::LockJITContext(TLS);
+
+      if (BNetForceX86Enabled && BNetForceX86TargetProcess && BNetForceX86Ready) {
+        constexpr uint32_t ProcessMachineInformation = 88;
+
+        // Hard fallback for IsWow64Process2 path: if ProcessMachineInformation
+        // probing fails, synthesize a successful x86/amd64 tuple.
+        if (BNetIDs.NtQueryInformationProcess && EntryRAX == *BNetIDs.NtQueryInformationProcess &&
+            SysArgs32[1] == ProcessMachineInformation) {
+          const bool ForcedTuple = ForceX86WriteProcessMachineTuple(SysArgs32[2], SysArgs32[3]);
+          if (ForcedTuple && ReturnRAX != 0) {
+            BNetLog("FEX_BNET_DETECT: force_x86 NtQueryInformationProcess(class={}) synthesized_success status=0x{:08x}", SysArgs32[1],
+                    static_cast<uint32_t>(ReturnRAX));
+            ReturnRAX = 0;
+          } else if (ForcedTuple) {
+            BNetLog("FEX_BNET_DETECT: force_x86 NtQueryInformationProcess(class={}) patched", SysArgs32[1]);
+          }
+        }
+
+        if (ReturnRAX == 0) {
+          bool Patched {};
+          if (BNetIDs.NtQuerySystemInformation && EntryRAX == *BNetIDs.NtQuerySystemInformation) {
+            Patched = ForceX86PatchSystemInfo(SysArgs32[0], SysArgs32[1], SysArgs32[2]);
+            if (Patched) {
+              BNetLog("FEX_BNET_DETECT: force_x86 NtQuerySystemInformation(class={}) patched", SysArgs32[0]);
+            }
+          } else if (BNetIDs.NtQuerySystemInformationEx && EntryRAX == *BNetIDs.NtQuerySystemInformationEx) {
+            NtQuerySystemInformationExArgs Args {};
+            uint32_t PatchedClass {};
+            if (DecodeNtQuerySystemInformationExMachineProbe(SysArgs32, &Args)) {
+              Patched = ForceX86PatchSystemInfoEx(Args.Class, Args.OutputPtr, Args.OutputLen);
+              PatchedClass = Args.Class;
+            } else {
+              Patched = ForceX86PatchSystemInfoEx(SysArgs32[0], SysArgs32[3], SysArgs32[4]);
+              PatchedClass = SysArgs32[0];
+            }
+            if (Patched) {
+              BNetLog("FEX_BNET_DETECT: force_x86 NtQuerySystemInformationEx(class={}) patched", PatchedClass);
+            }
+          }
+        }
+      }
+
+      if (BNetLogEnabled) {
+        const char* Name {nullptr};
+        uint32_t Class {0};
+        uint32_t OutPtr {0};
+        uint32_t Len {0};
+        const char* Hint {nullptr};
+        if (BNetIDs.NtQuerySystemInformation && EntryRAX == *BNetIDs.NtQuerySystemInformation) {
+          Name = "NtQuerySystemInformation";
+          Class = SysArgs32[0];
+          OutPtr = SysArgs32[1];
+          Len = SysArgs32[2];
+          Hint = BNetSystemInfoClassHint(Class);
+        } else if (BNetIDs.NtQuerySystemInformationEx && EntryRAX == *BNetIDs.NtQuerySystemInformationEx) {
+          NtQuerySystemInformationExArgs Args {};
+          Name = "NtQuerySystemInformationEx";
+          if (DecodeNtQuerySystemInformationExMachineProbe(SysArgs32, &Args)) {
+            Class = Args.Class;
+            OutPtr = Args.OutputPtr;
+            Len = Args.OutputLen;
+          } else {
+            Class = SysArgs32[0];
+            OutPtr = SysArgs32[3];
+            Len = SysArgs32[4];
+          }
+          Hint = BNetSystemInfoClassHint(Class);
+        } else if (BNetIDs.NtQueryInformationProcess && EntryRAX == *BNetIDs.NtQueryInformationProcess) {
+          Name = "NtQueryInformationProcess";
+          Class = SysArgs32[1];
+          OutPtr = SysArgs32[2];
+          Len = SysArgs32[3];
+          Hint = BNetProcessInfoClassHint(Class);
+        }
+        if (Name && Hint) {
+          if (ReturnRAX == 0 && OutPtr && Len >= sizeof(uint16_t)) {
+            const auto* Words = reinterpret_cast<const uint16_t*>(static_cast<uintptr_t>(OutPtr));
+            if (IsReadablePtr(Words, sizeof(uint16_t))) {
+              const auto First = Words[0];
+              if (Len >= sizeof(uint16_t) * 2 && IsReadablePtr(Words, sizeof(uint16_t) * 2)) {
+                BNetLog("FEX_BNET_DETECT: {} {} -> status=0x{:08x} out=[0x{:04x},0x{:04x}]",
+                        Name, Hint, static_cast<uint32_t>(ReturnRAX), First, Words[1]);
+              } else {
+                BNetLog("FEX_BNET_DETECT: {} {} -> status=0x{:08x} out=[0x{:04x}]",
+                        Name, Hint, static_cast<uint32_t>(ReturnRAX), First);
+              }
+            } else {
+              BNetLog("FEX_BNET_DETECT: {} {} -> status=0x{:08x} out=unreadable", Name, Hint, static_cast<uint32_t>(ReturnRAX));
+            }
+          } else {
+            BNetLog("FEX_BNET_DETECT: {} {} -> status=0x{:08x}", Name, Hint, static_cast<uint32_t>(ReturnRAX));
+          }
+        }
+      }
     }
     // If a new context has been set, use it directly and don't return to the syscall caller
     if (Frame->State.rip == (uint64_t)BridgeInstrs::Syscall || Frame->State.rip == (uint64_t)BridgeInstrs::UnixCall) {
@@ -511,6 +1003,7 @@ public:
 void BTCpuProcessInit() {
   FEX::Windows::InitCRTProcess();
   const auto ExecutableName = FEX::Windows::BaseName(FEX::Windows::GetExecutableFilePath());
+  BNetForceX86TargetProcess = IsBNetForceX86TargetProcess(ExecutableName);
   FEX::Config::LoadConfig(fextl::string {ExecutableName}, _environ, FEX::ReadPortabilityInformation());
   FEXCore::Config::ReloadMetaLayer();
   FEX::Windows::Logging::Init();
@@ -547,6 +1040,7 @@ void BTCpuProcessInit() {
 
   auto NtDllX86 = reinterpret_cast<SYSTEM_DLL_INIT_BLOCK*>(GetProcAddress(NtDll, "LdrSystemDllInitBlock"))->ntdll_handle;
   HandleImageMap(NtDllX86);
+  InitBNetLoggingAndIDs(NtDll, NtDllX86);
 
   CPUFeatures.emplace(*CTX);
 
