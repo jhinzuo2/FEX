@@ -1113,7 +1113,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
 }
 
 void Decoder::BranchTargetInMultiblockRange() {
-  if (!CTX->Config.Multiblock) {
+  if (!MultiblockEnabled) {
     return;
   }
 
@@ -1315,11 +1315,19 @@ void Decoder::AddBranchTarget(uint64_t Target) {
         BlockIt->NumInstructions = SplitIdx;
 
         BlockInfo.Blocks.insert(BlockSuccIt, SplitBlock);
-      } // else misaligned, leave as a branch out of the block
+      } else {
+        // x86 permits control-flow targets to begin inside bytes consumed by a
+        // different instruction stream.  A non-overlapping multiblock CFG
+        // cannot represent both decodes without binding one architectural RIP
+        // to the wrong instruction boundary.  Discard this pass and let the
+        // caller retry as a single block, where the edge exits at the exact
+        // target and that RIP is decoded independently on re-entry.
+        RequiresSingleBlockFallback = true;
+      }
 
-      // If we split a block then the target has already been visited as part of that, if it was
-      // misaligned the jump will just leave the multiblock, mark it as visited to avoid running
-      // this code path again and just bail out early.
+      // If we split a block then the target has already been visited as part of that.  For a
+      // misaligned target this pass will be discarded, but mark it visited so the remaining
+      // speculative decode does not try to create an overlapping block before the retry.
       VisitedBlocks.insert(Target);
       return;
     }
@@ -1357,14 +1365,43 @@ bool Decoder::CheckIfCacheable(FEXCore::Core::InternalThreadState& Thread, const
 
 void Decoder::DecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState* Thread, const uint8_t* _InstStream, uint64_t PC, uint64_t MaxInst) {
   FEXCORE_PROFILE_SCOPED("DecodeInstructions");
+  DecodedBuffer = PoolObject.ReownOrClaimBuffer();
+
+  // A discarded multiblock pass must not leak speculative AOT branch targets
+  // to its caller.  Publish only targets produced by the final decode pass.
+  auto* FinalExternalBranches = ExternalBranches;
+  fextl::set<uint64_t> PassExternalBranches;
+  if (FinalExternalBranches) {
+    ExternalBranches = &PassExternalBranches;
+  }
+
+  DecodeInstructionsAtEntryPass(Thread, _InstStream, PC, MaxInst, CTX->Config.Multiblock);
+  if (RequiresSingleBlockFallback) {
+    PassExternalBranches.clear();
+    DecodeInstructionsAtEntryPass(Thread, _InstStream, PC, MaxInst, false);
+  }
+
+  if (FinalExternalBranches) {
+    FinalExternalBranches->merge(PassExternalBranches);
+    ExternalBranches = FinalExternalBranches;
+  }
+}
+
+void Decoder::DecodeInstructionsAtEntryPass(FEXCore::Core::InternalThreadState* Thread, const uint8_t* _InstStream, uint64_t PC, uint64_t MaxInst,
+                                            bool EnableMultiblock) {
   BlockInfo.TotalInstructionCount = 0;
   BlockInfo.Blocks.clear();
+  BlockInfo.EntryPoints.clear();
+  BlockInfo.CodePages.clear();
+  CurrentBlockTargets.clear();
+  BlocksToDecode.clear();
   VisitedBlocks.clear();
   // Reset internal state management
   DecodedSize = 0;
   MaxCondBranchForward = 0;
   MaxCondBranchBackwards = ~0ULL;
-  DecodedBuffer = PoolObject.ReownOrClaimBuffer();
+  MultiblockEnabled = EnableMultiblock;
+  RequiresSingleBlockFallback = false;
 
   // Decode operating mode from thread's CS segment.
   const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);

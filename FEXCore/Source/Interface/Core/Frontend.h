@@ -93,6 +93,8 @@ private:
 
   bool DecodeInstructionImpl(uint64_t PC);
   DecodedBlockStatus DecodeInstruction(uint64_t PC);
+  void DecodeInstructionsAtEntryPass(FEXCore::Core::InternalThreadState* Thread, const uint8_t* InstStream, uint64_t PC, uint64_t MaxInst,
+                                     bool EnableMultiblock);
 
   void BranchTargetInMultiblockRange();
   bool IsBranchMonoTailcall(uint64_t NumInstructions) const;
@@ -144,6 +146,8 @@ private:
   uint64_t SectionMaxAddress {~0ULL};
   uint64_t SectionMinAddress {};
   uint64_t NextBlockStartAddress {~0ULL};
+  bool MultiblockEnabled {};
+  bool RequiresSingleBlockFallback {};
 
   DecodedBlockInformation BlockInfo;
   fextl::set<uint64_t> CurrentBlockTargets;
