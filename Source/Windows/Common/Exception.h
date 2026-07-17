@@ -11,7 +11,8 @@
 namespace FEX::Windows {
 template<typename TReg>
 static inline EXCEPTION_RECORD
-HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault, const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax) {
+HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault, uint64_t FaultAddress, const EXCEPTION_RECORD& Src,
+                     TReg& Rip, TReg Rax) {
   EXCEPTION_RECORD Dst = Src;
   Dst.ExceptionAddress = reinterpret_cast<void*>(Rip);
 
@@ -62,7 +63,7 @@ HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& F
       // A page-fault raised by an explicit break in JIT code is always an execute fault
       Dst.NumberParameters = 2;
       Dst.ExceptionInformation[0] = EXCEPTION_EXECUTE_FAULT;
-      Dst.ExceptionInformation[1] = Rip;
+      Dst.ExceptionInformation[1] = FaultAddress ? FaultAddress : Rip;
       return Dst;
     default: LogMan::Msg::EFmt("Unknown SIGSEGV trap: {}", Fault.TrapNo); break;
     }
