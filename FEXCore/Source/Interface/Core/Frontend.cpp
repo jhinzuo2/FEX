@@ -1087,10 +1087,13 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
     // Error while decoding instruction. We don't know the table or instruction size
     DecodeInst->TableInfo = nullptr;
     DecodeInst->FaultAddress = NonExecutableAddress;
-    auto Result = ErrorDuringDecoding   ? DecodedBlockStatus::INVALID_INST :
-                  DecodeInst->InstSize  ? DecodedBlockStatus::PARTIAL_DECODE_INST :
-                  HitNonExecutableRange ? DecodedBlockStatus::NOEXEC_INST :
-                                          DecodedBlockStatus::BAD_RELOCATION;
+    // A failed instruction fetch takes priority over any decode error caused by
+    // substituting zero for the inaccessible byte. Otherwise a page-tail fetch
+    // fault can be incorrectly exposed to the guest as an invalid opcode.
+    const auto Result = HitNonExecutableRange ? (DecodeInst->InstSize ? DecodedBlockStatus::PARTIAL_DECODE_INST :
+                                                                       DecodedBlockStatus::NOEXEC_INST) :
+                        ErrorDuringDecoding   ? DecodedBlockStatus::INVALID_INST :
+                                                DecodedBlockStatus::BAD_RELOCATION;
     DecodeInst->InstSize = 0;
     return Result;
   } else if (!DecodeInst->TableInfo || (DecodeInst->TableInfo->Type == TYPE_INST && !DecodeInst->TableInfo->OpcodeDispatcher.OpDispatch)) {
