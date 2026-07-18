@@ -541,9 +541,6 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
     const uint8_t* GuestCode {};
     GuestCode = reinterpret_cast<const uint8_t*>(GuestRIP);
 
-    bool HadDispatchError {false};
-    bool HadInvalidInst {false};
-
     Thread->FrontendDecoder->DecodeInstructionsAtEntry(Thread, GuestCode, GuestRIP, MaxInst);
 
     auto BlockInfo = Thread->FrontendDecoder->GetDecodedBlockInfo();
@@ -565,6 +562,13 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
     for (size_t j = 0; j < CodeBlocks->size(); ++j) {
       const FEXCore::Frontend::Decoder::DecodedBlocks& Block = CodeBlocks->at(j);
+
+      // Dispatch failures and invalid instructions terminate only the decoded
+      // block that contains them. Other block targets in the same multiblock
+      // compilation unit are independent entry paths and must still emit all
+      // of their instructions.
+      bool HadDispatchError {false};
+      bool HadInvalidInst {false};
 
 #ifdef ZYDIS_DISASSEMBLER
       if (FEXCore::Config::Get_X86DISASSEMBLE() && CodeBlocks->size() > 1) {
