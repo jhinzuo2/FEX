@@ -17,6 +17,7 @@ $end_info$
 #include "Interface/Core/CPUBackend.h"
 #include "Interface/Core/CPUID.h"
 #include "Interface/Core/Frontend.h"
+#include "Interface/Core/ForceTSO.h"
 #include "Interface/Core/OpcodeDispatcher.h"
 #include "Interface/Core/JIT/JITClass.h"
 #include "Interface/Core/Dispatcher/Dispatcher.h"
@@ -576,13 +577,11 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
       }
 #endif
 
-      bool BlockInForceTSOValidRange = false;
+      const auto BlockForceTSO = Core::GetForceTSOBlockInfo(ForceTSOValidRanges, ForceTSOInstructions, Block.Entry, Block.Size);
+      const bool BlockInForceTSOValidRange = BlockForceTSO.InValidRange;
       auto InstForceTSOIt = ForceTSOInstructions.end();
-      if (ForceTSOValidRanges.Contains({Block.Entry, Block.Entry + Block.Size})) {
-        if (auto It = ForceTSOInstructions.lower_bound(Block.Entry); *It < Block.Entry + Block.Size) {
-          InstForceTSOIt = It;
-          BlockInForceTSOValidRange = true;
-        }
+      if (BlockForceTSO.FirstForceTSOInstruction) {
+        InstForceTSOIt = ForceTSOInstructions.lower_bound(*BlockForceTSO.FirstForceTSOInstruction);
       }
 
       // Set the block entry point

@@ -180,11 +180,14 @@ FEXCore::ExecutableFileSectionInfo ImageTracker::HandleImageMap(std::string_view
   fextl::set<uint64_t> VolatileInstructions {};
   FEXCore::IntervalList<uint64_t> VolatileValidRanges {};
   LoadImageVolatileMetadata(VolatileInstructions, VolatileValidRanges, Module, Nt, Address, EndAddress);
+  bool HasExtendedMetadata {};
   if (auto It = ExtendedMetaData.find(ID); It != ExtendedMetaData.end()) {
     FEX::VolatileMetadata::ApplyFEXExtendedVolatileMetadata(It->second, VolatileInstructions, VolatileValidRanges, Address, EndAddress);
+    HasExtendedMetadata = true;
   }
   if (auto It = ExtendedMetaData.find(fextl::string {ModuleName}); It != ExtendedMetaData.end()) {
     FEX::VolatileMetadata::ApplyFEXExtendedVolatileMetadata(It->second, VolatileInstructions, VolatileValidRanges, Address, EndAddress);
+    HasExtendedMetadata = true;
   }
 
   if (!VolatileInstructions.empty() || !VolatileValidRanges.Empty()) {
@@ -192,14 +195,38 @@ FEXCore::ExecutableFileSectionInfo ImageTracker::HandleImageMap(std::string_view
     CTX.AddForceTSOInformation(VolatileValidRanges, std::move(VolatileInstructions));
   }
 
+  if (MainImage && HasExtendedMetadata) {
+    std::unique_lock Lk {ImagesLock};
+    PersistentForceTSOMainImages.insert_or_assign(Address, EndAddress);
+  }
+
   return ImageInfo->SectionInfo;
 }
 
 void ImageTracker::HandleImageUnmap(uint64_t Address, uint64_t Size) {
   std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
-  CTX.RemoveForceTSOInformation(Address, Size);
+  const uint64_t UnmapEnd = Address + Size;
+  bool PreserveForceTSO {};
+  {
+    std::shared_lock Lk {ImagesLock};
+    auto It = PersistentForceTSOMainImages.upper_bound(Address);
+    if (It != PersistentForceTSOMainImages.begin()) {
+      const auto Previous = std::prev(It);
+      PreserveForceTSO = Address < Previous->second && UnmapEnd > Previous->first;
+    }
+    if (!PreserveForceTSO && It != PersistentForceTSOMainImages.end()) {
+      PreserveForceTSO = Address < It->second && UnmapEnd > It->first;
+    }
+  }
+
+  if (!PreserveForceTSO) {
+    CTX.RemoveForceTSOInformation(Address, Size);
+  }
 
   std::unique_lock Lk {ImagesLock};
+  // Protected main executables can replace their original section view with
+  // private pages. Preserve only their explicitly configured TSO metadata;
+  // the mapped image identity must still follow the actual section lifetime.
   MappedImages.erase(Address);
 }
 
