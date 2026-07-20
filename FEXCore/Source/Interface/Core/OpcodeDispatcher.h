@@ -2502,6 +2502,16 @@ private:
     }
   }
 
+  bool IsMemcpyTSOEnabled() const {
+    if (ForceTSO == ForceTSOMode::ForceEnabled) {
+      return true;
+    } else if (ForceTSO == ForceTSOMode::ForceDisabled) {
+      return false;
+    } else {
+      return CTX->IsMemcpyAtomicTSOEnabled();
+    }
+  }
+
   Ref _StoreMemAutoTSO(RegClass Class, OpSize Size, Ref Addr, Ref Value, OpSize Align = OpSize::i8Bit) {
     if (IsTSOEnabled(Class)) {
       return _StoreMemTSO(Class, Size, Value, Addr, Invalid(), Align, MemOffsetType::SXTX, 1);

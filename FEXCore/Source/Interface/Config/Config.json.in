@@ -571,6 +571,19 @@
           "  * Disable TSO for multiple modules",
           "      `hl2_linux:libsdl2.so`"
         ]
+      },
+      "TSOWhitelist": {
+        "Type": "str",
+        "Default": "",
+        "Desc": [
+          "Module-local TSO whitelist. Only implemented for WoW64/arm64ec.",
+          "A listed module defaults ordinary automatic TSO operations to disabled.",
+          "TSO remains enabled for the listed half-open ranges and exact instruction offsets.",
+          "Other modules continue to use the global TSO configuration.",
+          "<module>;<offset begin>-<offset end>,...;<instruction offset>,...:<another>",
+          "example:",
+          "  `game.exe;0x1000-0x1200;0x2500,0x2510`"
+        ]
       }
     }
   },

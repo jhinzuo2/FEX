@@ -15,7 +15,18 @@ struct ExtendedVolatileMetadata {
   bool ModuleTSODisabled;
 };
 
+struct TSOWhitelistMetadata {
+  FEXCore::IntervalList<uint64_t> EnabledRanges;
+  fextl::set<uint64_t> EnabledInstructions;
+};
+
+struct TSOWhitelistConfig {
+  bool Valid {true};
+  fextl::unordered_map<fextl::string, TSOWhitelistMetadata> Modules;
+};
+
 fextl::unordered_map<fextl::string, ExtendedVolatileMetadata> ParseExtendedVolatileMetadata(std::string_view ListOfDescriptors);
+TSOWhitelistConfig ParseTSOWhitelist(std::string_view ListOfDescriptors);
 
 inline void ApplyFEXExtendedVolatileMetadata(FEX::VolatileMetadata::ExtendedVolatileMetadata& ExtendedMetaData,
                                              fextl::set<uint64_t>& VolatileInstructions, FEXCore::IntervalList<uint64_t>& VolatileValidRanges,
@@ -46,6 +57,38 @@ inline void ApplyFEXExtendedVolatileMetadata(FEX::VolatileMetadata::ExtendedVola
     VolatileValidRanges.Clear();
     VolatileValidRanges.Insert({Address, EndAddress});
   }
+}
+
+inline bool ApplyTSOWhitelistMetadata(const FEX::VolatileMetadata::TSOWhitelistMetadata& Metadata,
+                                      FEXCore::IntervalList<uint64_t>& ModuleRanges,
+                                      FEXCore::IntervalList<uint64_t>& EnabledRanges, fextl::set<uint64_t>& EnabledInstructions,
+                                      uint64_t Address, uint64_t EndAddress) {
+  const uint64_t ModuleSize = EndAddress - Address;
+
+  // Validate everything before applying anything. A malformed descriptor must
+  // leave the module on the safe global TSO policy rather than partially
+  // disabling its memory ordering.
+  for (const auto& Range : Metadata.EnabledRanges) {
+    if (Range.Offset >= Range.End || Range.End > ModuleSize) {
+      LogMan::Msg::EFmt("TSO whitelist range [{:#x}, {:#x}) is outside module size {:#x}", Range.Offset, Range.End, ModuleSize);
+      return false;
+    }
+  }
+  for (const auto Offset : Metadata.EnabledInstructions) {
+    if (Offset >= ModuleSize) {
+      LogMan::Msg::EFmt("TSO whitelist instruction {:#x} is outside module size {:#x}", Offset, ModuleSize);
+      return false;
+    }
+  }
+
+  ModuleRanges.Insert({Address, EndAddress});
+  for (const auto& Range : Metadata.EnabledRanges) {
+    EnabledRanges.Insert({Address + Range.Offset, Address + Range.End});
+  }
+  for (const auto Offset : Metadata.EnabledInstructions) {
+    EnabledInstructions.emplace(Address + Offset);
+  }
+  return true;
 }
 
 } // namespace FEX::VolatileMetadata

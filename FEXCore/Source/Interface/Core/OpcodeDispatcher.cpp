@@ -3216,7 +3216,7 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
     Ref Dest = MakeSegmentAddress(X86State::REG_RDI, 0, X86Tables::DecodeFlags::FLAG_ES_PREFIX, true);
 
     // Store to memory where RDI points
-    if (CTX->IsMemcpyAtomicTSOEnabled()) {
+    if (IsMemcpyTSOEnabled()) {
       _StoreMemGPRAutoTSO(Size, Dest, Src, Size);
     } else {
       _StoreMem(RegClass::GPR, Size, Src, Dest, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
@@ -3237,7 +3237,7 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
 
     Ref Counter = LoadGPRRegister(X86State::REG_RCX);
 
-    auto Result = _MemSet(CTX->IsAtomicTSOEnabled(), Size, Segment ?: InvalidNode, Dest, Src, Counter, LoadDir(1));
+    auto Result = _MemSet(IsTSOEnabled(RegClass::GPR), Size, Segment ?: InvalidNode, Dest, Src, Counter, LoadDir(1));
     StoreGPRRegister(X86State::REG_RCX, Constant(0));
     StoreGPRRegister(X86State::REG_RDI, Result);
   }
@@ -3271,7 +3271,7 @@ void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
 
     Ref Result_Src = _AllocateGPR(false);
     Ref Result_Dst = _AllocateGPR(false);
-    _MemCpy(CTX->IsAtomicTSOEnabled(), Size, DstAddr, SrcAddr, Counter, LoadDir(1), Result_Dst, Result_Src);
+    _MemCpy(IsTSOEnabled(RegClass::GPR), Size, DstAddr, SrcAddr, Counter, LoadDir(1), Result_Dst, Result_Src);
 
     if (DstSegment) {
       Result_Dst = Sub(OpSize::i64Bit, Result_Dst, DstSegment);
@@ -3288,7 +3288,7 @@ void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
     Ref RSI = MakeSegmentAddress(X86State::REG_RSI, Op->Flags, X86Tables::DecodeFlags::FLAG_DS_PREFIX);
     Ref RDI = MakeSegmentAddress(X86State::REG_RDI, 0, X86Tables::DecodeFlags::FLAG_ES_PREFIX, true);
 
-    if (CTX->IsMemcpyAtomicTSOEnabled()) {
+    if (IsMemcpyTSOEnabled()) {
       auto Src = _LoadMemGPRAutoTSO(Size, RSI, Size);
 
       // Store to memory where RDI points

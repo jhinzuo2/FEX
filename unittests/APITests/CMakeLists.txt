@@ -6,6 +6,7 @@ set(TESTS
   FileMappingBaseAddress
   Filesystem
   InterruptableConditionVariable
+  TSOWhitelist
   StringUtils
   WildcardMatcher)
 

@@ -235,7 +235,11 @@ public:
 
   void AddForceTSOInformation(const IntervalList<uint64_t>& ValidRanges, fextl::set<uint64_t>&& Instructions) override;
 
+  void AddTSOWhitelistInformation(const IntervalList<uint64_t>& ModuleRanges, const IntervalList<uint64_t>& EnabledRanges,
+                                  fextl::set<uint64_t>&& Instructions) override;
+
   void RemoveForceTSOInformation(uint64_t Address, uint64_t Size) override;
+  void RemoveTSOWhitelistInformation(uint64_t Address, uint64_t Size) override;
 
   void MarkMonoDetected() override {
     MonoDetected = true;
@@ -480,6 +484,9 @@ private:
   fextl::unordered_map<uint64_t, CustomIRHandlerEntry> CustomIRHandlers;
   IntervalList<uint64_t> ForceTSOValidRanges; // The ranges for which ForceTSOInstructions has populated data
   fextl::set<uint64_t> ForceTSOInstructions;
+  IntervalList<uint64_t> TSOWhitelistModuleRanges;
+  IntervalList<uint64_t> TSOWhitelistEnabledRanges;
+  fextl::set<uint64_t> TSOWhitelistInstructions;
 
   bool MonoDetected = false;
   std::atomic<uint64_t> MonoBackpatcherBlock;

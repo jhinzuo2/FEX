@@ -115,6 +115,7 @@ static fextl::robin_map<uint32_t, FEXCore::GuestRelocationType> LoadImageRelocat
 ImageTracker::ImageTracker(FEXCore::Context::Context& CTX, bool IsGeneratingCache)
   : CTX {CTX}
   , ExtendedMetaData {FEX::VolatileMetadata::ParseExtendedVolatileMetadata(ExtendedVolatileMetadataConfig())}
+  , TSOWhitelist {FEX::VolatileMetadata::ParseTSOWhitelist(TSOWhitelistConfig())}
   , IsGeneratingCache {IsGeneratingCache} {}
 
 ImageTracker::MappedImageInfo::MappedImageInfo(std::string_view Path, uint64_t Address, ArchImageNtHeaders* Nt,
@@ -177,9 +178,33 @@ FEXCore::ExecutableFileSectionInfo ImageTracker::HandleImageMap(std::string_view
   }
 
   uint64_t EndAddress = Address + Nt->OptionalHeader.SizeOfImage;
+  const auto NormalizedModuleName = ToLower(ModuleName);
+  const auto WhitelistIt = TSOWhitelist.Modules.find(NormalizedModuleName);
+  const bool HasWhitelist = TSOWhitelist.Valid && WhitelistIt != TSOWhitelist.Modules.end();
+  const bool HasExtendedByID = ExtendedMetaData.find(ID) != ExtendedMetaData.end();
+  const bool HasExtendedByName = ExtendedMetaData.find(fextl::string {ModuleName}) != ExtendedMetaData.end() ||
+                                 ExtendedMetaData.find(NormalizedModuleName) != ExtendedMetaData.end();
+  if (HasWhitelist && (HasExtendedByID || HasExtendedByName)) {
+    LogMan::Msg::EFmt("Module {} is present in both TSOWhitelist and ExtendedVolatileMetadata; keeping safe global TSO", ModuleName);
+    return ImageInfo->SectionInfo;
+  }
+
   fextl::set<uint64_t> VolatileInstructions {};
   FEXCore::IntervalList<uint64_t> VolatileValidRanges {};
   LoadImageVolatileMetadata(VolatileInstructions, VolatileValidRanges, Module, Nt, Address, EndAddress);
+
+  bool HasWhitelistMetadata {};
+  if (HasWhitelist) {
+    FEXCore::IntervalList<uint64_t> ModuleRanges {};
+    FEXCore::IntervalList<uint64_t> EnabledRanges {};
+    fextl::set<uint64_t> EnabledInstructions {};
+    if (FEX::VolatileMetadata::ApplyTSOWhitelistMetadata(WhitelistIt->second, ModuleRanges, EnabledRanges, EnabledInstructions,
+                                                         Address, EndAddress)) {
+      CTX.AddTSOWhitelistInformation(ModuleRanges, EnabledRanges, std::move(EnabledInstructions));
+      HasWhitelistMetadata = true;
+    }
+  }
+
   bool HasExtendedMetadata {};
   if (auto It = ExtendedMetaData.find(ID); It != ExtendedMetaData.end()) {
     FEX::VolatileMetadata::ApplyFEXExtendedVolatileMetadata(It->second, VolatileInstructions, VolatileValidRanges, Address, EndAddress);
@@ -195,7 +220,7 @@ FEXCore::ExecutableFileSectionInfo ImageTracker::HandleImageMap(std::string_view
     CTX.AddForceTSOInformation(VolatileValidRanges, std::move(VolatileInstructions));
   }
 
-  if (MainImage && HasExtendedMetadata) {
+  if (MainImage && (HasExtendedMetadata || HasWhitelistMetadata)) {
     std::unique_lock Lk {ImagesLock};
     PersistentForceTSOMainImages.insert_or_assign(Address, EndAddress);
   }
@@ -221,6 +246,7 @@ void ImageTracker::HandleImageUnmap(uint64_t Address, uint64_t Size) {
 
   if (!PreserveForceTSO) {
     CTX.RemoveForceTSOInformation(Address, Size);
+    CTX.RemoveTSOWhitelistInformation(Address, Size);
   }
 
   std::unique_lock Lk {ImagesLock};

@@ -666,16 +666,19 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           auto Fn = TableInfo->OpcodeDispatcher.OpDispatch;
           Thread->OpDispatcher->ResetHandledLock();
           Thread->OpDispatcher->ResetDecodeFailure();
-          IR::ForceTSOMode ForceTSO = IR::ForceTSOMode::NoOverride;
-          if (BlockInForceTSOValidRange) {
-            if (InstForceTSOIt != ForceTSOInstructions.end() && *InstForceTSOIt == InstAddress) {
-              ForceTSO = IR::ForceTSOMode::ForceEnabled;
-            } else {
-              ForceTSO = IR::ForceTSOMode::ForceDisabled;
+          const auto Whitelist = Core::GetTSOWhitelistInfo(TSOWhitelistModuleRanges, TSOWhitelistEnabledRanges,
+                                                           TSOWhitelistInstructions, InstAddress);
+          const auto Policy = Core::ResolveTSOPolicy(
+            DecodedInfo->Flags & X86Tables::DecodeFlags::FLAG_FORCE_TSO,
+            InstForceTSOIt != ForceTSOInstructions.end() && *InstForceTSOIt == InstAddress, Whitelist, BlockInForceTSOValidRange);
+          const IR::ForceTSOMode ForceTSO = [&]() {
+            switch (Policy) {
+            case Core::TSOPolicyOverride::ForceEnabled: return IR::ForceTSOMode::ForceEnabled;
+            case Core::TSOPolicyOverride::ForceDisabled: return IR::ForceTSOMode::ForceDisabled;
+            case Core::TSOPolicyOverride::NoOverride: return IR::ForceTSOMode::NoOverride;
             }
-          } else if (DecodedInfo->Flags & X86Tables::DecodeFlags::FLAG_FORCE_TSO) {
-            ForceTSO = IR::ForceTSOMode::ForceEnabled;
-          }
+            FEX_UNREACHABLE;
+          }();
 
           Thread->OpDispatcher->SetForceTSO(ForceTSO);
           std::invoke(Fn, Thread->OpDispatcher, DecodedInfo);
@@ -1066,11 +1069,24 @@ void ContextImpl::AddForceTSOInformation(const IntervalList<uint64_t>& ValidRang
   ForceTSOInstructions.merge(std::move(Instructions));
 }
 
+void ContextImpl::AddTSOWhitelistInformation(const IntervalList<uint64_t>& ModuleRanges, const IntervalList<uint64_t>& EnabledRanges,
+                                             fextl::set<uint64_t>&& Instructions) {
+  LogMan::Throw::AFmt(CodeInvalidationMutex.try_lock() == false, "CodeInvalidationMutex needs to be unique_locked here");
+  TSOWhitelistModuleRanges.Insert(ModuleRanges);
+  TSOWhitelistEnabledRanges.Insert(EnabledRanges);
+  TSOWhitelistInstructions.merge(std::move(Instructions));
+}
+
 void ContextImpl::RemoveForceTSOInformation(uint64_t Address, uint64_t Size) {
   LogMan::Throw::AFmt(CodeInvalidationMutex.try_lock() == false, "CodeInvalidationMutex needs to be unique_locked here");
 
   ForceTSOValidRanges.Remove({Address, Address + Size});
   ForceTSOInstructions.erase(ForceTSOInstructions.lower_bound(Address), ForceTSOInstructions.upper_bound(Address + Size));
+}
+
+void ContextImpl::RemoveTSOWhitelistInformation(uint64_t Address, uint64_t Size) {
+  LogMan::Throw::AFmt(CodeInvalidationMutex.try_lock() == false, "CodeInvalidationMutex needs to be unique_locked here");
+  Core::RemoveTSOWhitelistInformation(TSOWhitelistModuleRanges, TSOWhitelistEnabledRanges, TSOWhitelistInstructions, Address, Size);
 }
 
 void ContextImpl::MarkMonoBackpatcherBlock(uint64_t BlockEntry) {
