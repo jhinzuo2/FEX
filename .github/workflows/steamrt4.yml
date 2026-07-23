@@ -9,6 +9,7 @@ on:
       - main
 
 env:
+  DEBIAN_FRONTEND: noninteractive
   BUILD_TYPE: Release
   CC: clang
   CXX: clang++
@@ -23,6 +24,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: '0'
+        fetch-tags: 'true'
 
     - name: Set runner label
       run: echo "runner_label=${{ matrix.arch[1] }}" >> $GITHUB_ENV
@@ -39,7 +43,7 @@ jobs:
         distrobox upgrade steamrt4
         distrobox enter --name steamrt4 -- sudo apt-get install -y \
           git cmake ninja-build ccache \
-          lld clang \
+          lld clang clang-tools \
           libclang-dev llvm-dev \
           libstdc++-14-dev-i386-cross libgcc-14-dev-i386-cross \
           libstdc++-14-dev-amd64-cross libgcc-14-dev-amd64-cross

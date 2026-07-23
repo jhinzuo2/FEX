@@ -10,6 +10,7 @@ $end_info$
 #include "Interface/IR/IREmitter.h"
 #include "Interface/IR/PassManager.h"
 #include "Interface/IR/RegisterAllocationData.h"
+#include "Interface/IR/Passes.h"
 #include "Interface/IR/Passes/IRValidation.h"
 #include "Interface/IR/Passes/RegisterAllocationPass.h"
 
@@ -46,7 +47,7 @@ void IRValidation::Run(IREmitter* IREmit) {
   OffsetToBlockMap.clear();
   EntryBlock = nullptr;
 
-  uint32_t Count = CurrentIR.GetSSACount();
+  const auto Count = CurrentIR.GetSSACount();
   if (Count > MaxNodes) {
     NodeIsLive.Realloc(Count);
   }
@@ -251,7 +252,7 @@ void IRValidation::Run(IREmitter* IREmit) {
 
   HadWarning = false;
   if (HadError || HadWarning) {
-    fextl::stringstream Out;
+    fextl::ostringstream Out;
     FEXCore::IR::Dump(&Out, &CurrentIR);
 
     if (HadError) {
@@ -271,7 +272,7 @@ void IRValidation::Run(IREmitter* IREmit) {
   }
 }
 
-fextl::unique_ptr<FEXCore::IR::Pass> CreateIRValidation() {
+fextl::unique_ptr<Pass> CreateIRValidation() {
   return fextl::make_unique<IRValidation>();
 }
 } // namespace FEXCore::IR::Validation

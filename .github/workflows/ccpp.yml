@@ -25,6 +25,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: '0'
+        fetch-tags: 'true'
 
     - name: Set runner info
       run: |
@@ -46,6 +49,7 @@ jobs:
       run: cmake --build build --target asm_files 32bit_asm_files JemallocLibs Catch2 vixl cephes_128bit
 
     - name: Build
+      id: build
       run: cmake --build build
 
     - name: Install
@@ -53,109 +57,96 @@ jobs:
 
     # GCC tests
     - name: GCC64 Target Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: gcc_target_tests_64
-        log-name: GCC64
 
     - name: GCC32 Target Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: gcc_target_tests_32
-        log-name: GCC32
 
     # API tests
     - name: API Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: api_tests
-        log-name: APITests
 
     - name: FEXCore API Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: fexcore_apitests
-        log-name: FEXCoreAPITests
 
     # ARM emission tests
     - name: ARM Emitter Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: emitter_tests
-        log-name: ARMEmitterTests
 
     # Linux  tests
     - name: FEX Linux Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: fex_linux_tests_all
-        log-name: FEXLinuxTests
       env:
         FEX_PORTABLE: 0
 
     # Thunking
     - name: Thunkgen tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: thunkgen_tests
-        log-name: ThunkgenTests
 
     - name: Test GL No-Thunks
-      if: ${{ always() && matrix.arch[1] == 'x64' }}
+      if: ${{ steps.build.outcome == 'success' && matrix.arch[1] == 'x64' }}
       uses: ./.github/workflows/test
       with:
         target: thunk_functional_tests_nothunks
-        log-name: NoThunkResults
       env:
         DISPLAY: ':0'
 
     - name: Test GL Thunks
-      if: ${{ always() && matrix.arch[1] == 'x64' }}
+      if: ${{ steps.build.outcome == 'success' && matrix.arch[1] == 'x64' }}
       uses: ./.github/workflows/test
       with:
         target: thunk_functional_tests_thunks
-        log-name: ThunkResults
       env:
         DISPLAY: ':0'
 
     # ASM tests
     - name: ASM Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: asm_tests
-        log-name: ASM
 
     # POSIX tests
     - name: POSIX Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: posix_tests
-        log-name: Posix
 
     # GVisor tests
     - name: GVisor Tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: gvisor_tests
-        log-name: GVisor
 
     # Struct verifier tests
     - name: Struct verifier tests
-      if: ${{ always() }}
+      if: steps.build.outcome == 'success'
       uses: ./.github/workflows/test
       with:
         target: struct_verifier
-        log-name: StructVerifier
 
     - name: Remove old SHM regions
       if: ${{ always() }}
@@ -167,5 +158,5 @@ jobs:
       timeout-minutes: 1
       with:
         name: Results-${{ env.runner_name }}-${{ env.runner_label }}
-        path: ${{ github.workspace }}/build/Testing/Temporary/LastTest_*.log
+        path: results/*.log
         retention-days: 3

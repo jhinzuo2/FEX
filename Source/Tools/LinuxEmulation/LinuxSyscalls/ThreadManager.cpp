@@ -86,19 +86,17 @@ uint32_t ThreadManager::StatAlloc::FrontendAllocateSlots(uint32_t NewSize) {
 
   if (ftruncate(fd, NewSize) == -1) {
     LogMan::Msg::EFmt("[StatAlloc] ftruncate more failed");
-
-    goto err;
+    close(fd);
+    return CurrentSize;
   }
 
-  {
-    auto SharedBase = FEXCore::Allocator::mmap(Base, NewSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
-    if (SharedBase == MAP_FAILED) {
-      LogMan::Msg::EFmt("[StatAlloc] allocate more mmap shm failed");
-      goto err;
-    }
+  auto SharedBase = FEXCore::Allocator::mmap(Base, NewSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+  if (SharedBase == MAP_FAILED) {
+    LogMan::Msg::EFmt("[StatAlloc] allocate more mmap shm failed");
+    close(fd);
+    return CurrentSize;
   }
 
-err:
   close(fd);
   return NewSize;
 }
@@ -187,7 +185,10 @@ FEX::HLE::ThreadStateObject* ThreadManager::CreateThread(uint64_t InitialRIP, ui
   auto AllocBase =
     reinterpret_cast<uint64_t>(FEXCore::Allocator::mmap(nullptr, CALLRET_STACK_ALLOC_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
 
-  FEXCore::Allocator::VirtualName("FEXMem_Misc", reinterpret_cast<void*>(AllocBase), CALLRET_STACK_ALLOC_SIZE);
+  FEXCore::Allocator::VirtualName("FEXMem_CallRetStacks", reinterpret_cast<void*>(AllocBase), CALLRET_STACK_ALLOC_SIZE);
+
+  // Disable HUGEPAGE on callret stacks.
+  FEXCore::Allocator::VirtualTHPControl(reinterpret_cast<void*>(AllocBase), CALLRET_STACK_ALLOC_SIZE, FEXCore::Allocator::THPControl::Disable);
 
   // Set the base used for invalidation to the start past the guard pages
   ThreadStateObject->Thread->CallRetStackBase = reinterpret_cast<void*>(AllocBase + FEXCore::Utils::FEX_PAGE_SIZE);

@@ -20,7 +20,7 @@ option(ENABLE_ASSERTIONS "Enable debug assertions" FALSE)
 option(ENABLE_GDB_SYMBOLS "Enable GDBSymbols integration support" ${HAVE_GDB_JIT_READER_H})
 option(ENABLE_STRICT_WERROR "Enable stricter -Werror" FALSE)
 option(ENABLE_WERROR "Enable -Werror" FALSE)
-option(ENABLE_JEMALLOC "Enable jemalloc allocator" TRUE)
+option(ENABLE_FEX_ALLOCATOR "Enable allocator for FEX" TRUE)
 option(ENABLE_JEMALLOC_GLIBC_ALLOC "Enable jemalloc glibc allocator" TRUE)
 option(ENABLE_OFFLINE_TELEMETRY "Enable FEX offline telemetry" TRUE)
 option(ENABLE_COMPILE_TIME_TRACE "Enable time trace compile option" FALSE)
@@ -75,7 +75,7 @@ elseif (MSVC)
   message(FATAL_ERROR "FEX doesn't support MSVC! Use Clang on MinGW instead.")
 elseif (MINGW)
   message(STATUS "Building for MinGW")
-  set(ENABLE_JEMALLOC TRUE)
+  set(ENABLE_FEX_ALLOCATOR TRUE)
   set(ENABLE_JEMALLOC_GLIBC_ALLOC FALSE)
 else ()
   message(STATUS "Clang version ${CMAKE_CXX_COMPILER_VERSION}")
@@ -98,16 +98,16 @@ if (processor MATCHES "x86|amd64")
   endif()
 
   set(ARCHITECTURE_x86_64 1)
-  add_definitions(-DARCHITECTURE_x86_64=1)
+  add_compile_definitions(ARCHITECTURE_x86_64=1)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcx16")
 elseif (processor MATCHES "^aarch64|^arm64|^armv8\.*")
   set(ARCHITECTURE_arm64 1)
-  add_definitions(-DARCHITECTURE_arm64=1)
+  add_compile_definitions(ARCHITECTURE_arm64=1)
 
   # arm64ec needs to define both arm64 and arm64ec
   if (processor MATCHES "^arm64ec")
     set(ARCHITECTURE_arm64ec 1)
-    add_definitions(-DARCHITECTURE_arm64ec=1)
+    add_compile_definitions(ARCHITECTURE_arm64ec=1)
   endif()
 endif()
 
@@ -117,28 +117,28 @@ if (NOT (ARCHITECTURE_arm64 OR ARCHITECTURE_arm64ec OR ARCHITECTURE_x86_64))
 endif()
 
 if (BUILD_STEAM_SUPPORT)
-  add_definitions(-DFEX_STEAM_SUPPORT=1)
+  add_compile_definitions(FEX_STEAM_SUPPORT=1)
 endif()
 
 if (ENABLE_FEXCORE_PROFILER)
-  add_definitions(-DENABLE_FEXCORE_PROFILER=1)
+  add_compile_definitions(ENABLE_FEXCORE_PROFILER=1)
   string(TOUPPER "${FEXCORE_PROFILER_BACKEND}" FEXCORE_PROFILER_BACKEND)
 
   if (FEXCORE_PROFILER_BACKEND STREQUAL "GPUVIS")
-    add_definitions(-DFEXCORE_PROFILER_BACKEND=1)
+    add_compile_definitions(FEXCORE_PROFILER_BACKEND=1)
   elseif (FEXCORE_PROFILER_BACKEND STREQUAL "TRACY")
-    add_definitions(-DFEXCORE_PROFILER_BACKEND=2)
-    add_definitions(-DTRACY_ENABLE=1)
+    add_compile_definitions(FEXCORE_PROFILER_BACKEND=2)
+    add_compile_definitions(TRACY_ENABLE=1)
     # Required so that Tracy will only start in the selected guest application
-    add_definitions(-DTRACY_MANUAL_LIFETIME=1)
-    add_definitions(-DTRACY_DELAYED_INIT=1)
+    add_compile_definitions(TRACY_MANUAL_LIFETIME=1)
+    add_compile_definitions(TRACY_DELAYED_INIT=1)
     # This interferes with FEX's signal handling
-    add_definitions(-DTRACY_NO_CRASH_HANDLER=1)
+    add_compile_definitions(TRACY_NO_CRASH_HANDLER=1)
     # Tracy can gather call stack samples in regular intervals, but this
     # isn't useful for us since it would usually sample opaque JIT code
-    add_definitions(-DTRACY_NO_SAMPLING=1)
+    add_compile_definitions(TRACY_NO_SAMPLING=1)
     # This pulls in libbacktrace which allocators in global constructors (before FEX can set up its allocator hooks)
-    add_definitions(-DTRACY_NO_CALLSTACK=1)
+    add_compile_definitions(TRACY_NO_CALLSTACK=1)
     if (MINGW)
       message(FATAL_ERROR "Tracy profiler not supported on MinGW")
     endif()
@@ -152,7 +152,7 @@ if (ENABLE_JEMALLOC_GLIBC_ALLOC AND ENABLE_GLIBC_ALLOCATOR_HOOK_FAULT)
 endif()
 
 if (ENABLE_GLIBC_ALLOCATOR_HOOK_FAULT)
-  add_definitions(-DGLIBC_ALLOCATOR_FAULT=1)
+  add_compile_definitions(GLIBC_ALLOCATOR_FAULT=1)
 endif()
 
 # uninstall target
@@ -172,6 +172,13 @@ set(TUNE_ARCH "generic" CACHE STRING "Override the Arch the build is tuned for")
 set(OVERRIDE_VERSION "detect" CACHE STRING "Override the FEX version")
 set(OVERRIDE_HASH "detect" CACHE STRING "Override the FEX git hash")
 
+get_property(IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (NOT IS_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release
+        CACHE STRING "Choose the type of build." FORCE)
+    message(STATUS "No build type set, defaulting to a Release build")
+endif()
+
 string(TOUPPER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE)
 if (CMAKE_BUILD_TYPE MATCHES "DEBUG")
   set(ENABLE_ASSERTIONS TRUE)
@@ -179,12 +186,17 @@ endif()
 
 if (ENABLE_ASSERTIONS)
   message(STATUS "Assertions enabled")
-  add_definitions(-DASSERTIONS_ENABLED=1)
+  add_compile_definitions(ASSERTIONS_ENABLED=1)
 endif()
 
 if (ENABLE_GDB_SYMBOLS)
   message(STATUS "GDBSymbols support enabled")
-  add_definitions(-DGDB_SYMBOLS_ENABLED=1)
+  add_compile_definitions(GDB_SYMBOLS_ENABLED=1)
+endif()
+
+add_compile_definitions(_LARGEFILE64_SOURCE)
+if (WIN32)
+  add_compile_definitions(UNICODE _UNICODE)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -221,9 +233,9 @@ if (HAS_CLANG_PRESERVE_ALL)
 endif()
 
 if (ARCHITECTURE_arm64 AND HAS_CLANG_PRESERVE_ALL)
-  add_definitions("-DFEX_PRESERVE_ALL_ATTR=__attribute__((preserve_all))" "-DFEX_HAS_PRESERVE_ALL_ATTR=1")
+  add_compile_definitions("FEX_PRESERVE_ALL_ATTR=__attribute__((preserve_all))" "FEX_HAS_PRESERVE_ALL_ATTR=1")
 else()
-  add_definitions("-DFEX_PRESERVE_ALL_ATTR=" "-DFEX_HAS_PRESERVE_ALL_ATTR=0")
+  add_compile_definitions("FEX_PRESERVE_ALL_ATTR=" "FEX_HAS_PRESERVE_ALL_ATTR=0")
 endif()
 
 check_cxx_source_compiles(
@@ -234,18 +246,25 @@ check_cxx_source_compiles(
   return program_invocation_name == nullptr;
   }"
   HAS_PROGRAM_INVOCATION_NAME)
-add_definitions("-DHAS_PROGRAM_INVOCATION_NAME=${HAS_PROGRAM_INVOCATION_NAME}")
+add_compile_definitions("HAS_PROGRAM_INVOCATION_NAME=${HAS_PROGRAM_INVOCATION_NAME}")
 
 if (ENABLE_VIXL_SIMULATOR)
   # We can run the simulator on both x86-64 or AArch64 hosts
-  add_definitions(-DVIXL_SIMULATOR=1 -DVIXL_INCLUDE_SIMULATOR_AARCH64=1)
+  add_compile_definitions(VIXL_SIMULATOR=1 VIXL_INCLUDE_SIMULATOR_AARCH64=1)
 endif()
 
 if (ENABLE_CCACHE)
   find_program(CCACHE_PROGRAM ccache)
   if(CCACHE_PROGRAM)
-    message(STATUS "CCache enabled")
-    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+    execute_process(COMMAND "${CCACHE_PROGRAM}" --print-version
+     OUTPUT_VARIABLE CCACHE_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    message(STATUS "Enabling ccache ${CCACHE_VERSION}")
+    if (CCACHE_VERSION VERSION_GREATER_EQUAL "4.8")
+      # Set sloppiness to enable caching even for files that use __DATE__/__TIME__ macros
+      set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM} sloppiness=time_macros")
+    else()
+      set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+    endif()
   endif()
 endif()
 
@@ -274,7 +293,7 @@ endif()
 
 if (NOT ENABLE_OFFLINE_TELEMETRY)
   # Disable FEX offline telemetry entirely if asked
-  add_definitions(-DFEX_DISABLE_TELEMETRY=1)
+  add_compile_definitions(FEX_DISABLE_TELEMETRY=1)
 endif()
 
 if (ENABLE_UBSAN)
@@ -285,13 +304,13 @@ if (ENABLE_UBSAN)
   # that are regularly access unaligned.
   # function: syscalls cast function pointers to void (*)(unsigned long...), causing warnings
   # related to this access.
-  add_definitions(-DENABLE_UBSAN=1)
+  add_compile_definitions(ENABLE_UBSAN=1)
   add_compile_options(-fno-omit-frame-pointer -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=function -fno-sanitize-recover=undefined)
   link_libraries(-fno-omit-frame-pointer -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=function -fno-sanitize-recover=undefined)
 endif()
 
 if (ENABLE_ASAN)
-  add_definitions(-DENABLE_ASAN=1)
+  add_compile_definitions(ENABLE_ASAN=1)
   add_compile_options(-fno-omit-frame-pointer -fsanitize=address -fsanitize-address-use-after-scope)
   link_libraries(-fno-omit-frame-pointer -fsanitize=address -fsanitize-address-use-after-scope)
 endif()
@@ -319,12 +338,12 @@ elseif (NOT MINGW)
     " Use at your own risk!")
 endif()
 
-if (ENABLE_JEMALLOC)
-  # The jemalloc subproject that all FEXCore fextl objects allocate through.
-  add_subdirectory(External/jemalloc/)
+if (ENABLE_FEX_ALLOCATOR)
+  # The rpmalloc subproject that all FEXCore fextl objects allocate through.
+  add_subdirectory(External/rpmalloc/)
 elseif (NOT MINGW)
-  message(STATUS
-    " jemalloc disabled!\n"
+  message (STATUS
+    " FEX allocator is disabled!\n"
     " This is not a recommended configuration!\n"
     " This will very explicitly break 32-bit application execution!\n"
     " Use at your own risk!")
@@ -356,7 +375,6 @@ endif()
 include(CTest)
 if (BUILD_TESTING OR ENABLE_VIXL_DISASSEMBLER OR ENABLE_VIXL_SIMULATOR)
   add_subdirectory(External/vixl/)
-  include_directories(SYSTEM External/vixl/src/)
 endif()
 
 if (ENABLE_ZYDIS)
@@ -392,8 +410,8 @@ if (NOT TARGET xxHash::xxhash)
   add_subdirectory(External/xxhash/cmake_unofficial/)
 endif()
 
-add_definitions(-Wno-trigraphs)
-add_definitions(-DGLOBAL_DATA_DIRECTORY="${DATA_DIRECTORY}/")
+add_compile_options(-Wno-trigraphs)
+add_compile_definitions(GLOBAL_DATA_DIRECTORY="${DATA_DIRECTORY}/")
 
 if (BUILD_TESTING)
   find_package(Catch2 3 QUIET)
@@ -424,7 +442,6 @@ if (NOT range-v3_FOUND)
 endif()
 
 add_subdirectory(External/tiny-json/)
-include_directories(External/tiny-json/)
 
 include_directories(Source/)
 include_directories("${CMAKE_BINARY_DIR}/Source/")
@@ -446,6 +463,11 @@ endif()
 
 if(ENUM_ENUM_WARNING)
   add_compile_options(-Wno-deprecated-enum-enum-conversion)
+endif()
+
+# GCC enables -Wchanges-meaning by default and treats some cases as an error
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options(-Wno-error=changes-meaning)
 endif()
 
 if(ENABLE_WERROR OR ENABLE_STRICT_WERROR)
@@ -525,25 +547,37 @@ else()
   set(GIT_DESCRIBE_STRING "${OVERRIDE_VERSION}")
 endif()
 
-set(GIT_SHORT_HASH "Unknown")
+set(GIT_HASH "Unknown")
 
 if (OVERRIDE_HASH STREQUAL "detect")
   find_package(Git)
 
   if (GIT_FOUND)
     execute_process(
-      COMMAND ${GIT_EXECUTABLE} rev-parse --short=7 HEAD
+      COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-      OUTPUT_VARIABLE GIT_SHORT_HASH
+      OUTPUT_VARIABLE GIT_HASH
       ERROR_QUIET
       OUTPUT_STRIP_TRAILING_WHITESPACE)
   endif()
 else()
-  set(GIT_SHORT_HASH "${OVERRIDE_HASH}")
+  set(GIT_HASH "${OVERRIDE_HASH}")
 endif()
 
+message(STATUS "FEX version: ${GIT_DESCRIBE_STRING}")
+message(STATUS "FEX commit: ${GIT_HASH}")
+
+# Prepends 0x to every two-character sequence in the hash,
+# OR the final character of the hash, to plumb it for C++ usage. e.g.:
+# -DOVERRIDE_HASH=123456aa => 0x12, 0x34, 0x56, 0xaa,
+# -DOVERRIDE_HASH=12345678a => 0x12, 0x34, 0x56, 0x78, 0xa,
+string(REGEX
+  REPLACE "(..|.$)" "0x\\1, "
+  GIT_HASH_ARRAY "${GIT_HASH}")
+
 if (ENABLE_IWYU)
-  find_program(IWYU_EXE "iwyu")
+  find_program(IWYU_EXE
+    NAMES iwyu include-what-you-use)
   if (IWYU_EXE)
     message(STATUS "IWYU enabled")
     set(CMAKE_CXX_INCLUDE_WHAT_YOU_USE "${IWYU_EXE}")
@@ -671,6 +705,6 @@ if (BUILD_THUNKS)
   add_dependencies(uninstall uninstall_guest-libs-32)
 endif()
 
-if (BUILD_STEAM_SUPPORT)
+if (NOT MINGW AND BUILD_STEAM_SUPPORT)
   add_subdirectory(Source/Steam/)
 endif()

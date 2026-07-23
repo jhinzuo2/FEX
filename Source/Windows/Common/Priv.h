@@ -63,7 +63,7 @@ public:
   } while (0)
 
 #define DLLEXPORT_FUNC(Ret, Name, Args) \
-  Ret Name Args;                        \
+  extern "C" Ret Name Args;             \
   Ret(*__imp_##Name) Args = Name;       \
   Ret(*__imp_aux_##Name) Args = Name;   \
   Ret Name Args

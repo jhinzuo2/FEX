@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "Common/StringConv.h"
-#include "FEXCore/Utils/EnumUtils.h"
+#include "Utils/Config.h"
 
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Utils/Allocator.h>
+#include <FEXCore/Utils/EnumUtils.h>
 #include <FEXCore/Utils/FileLoading.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/StringUtils.h>
@@ -252,7 +253,7 @@ void Load() {
   }
 }
 
-fextl::string ExpandPath(const fextl::string& ContainerPrefix, const fextl::string& PathName) {
+static fextl::string ExpandPath(const fextl::string& ContainerPrefix, const fextl::string& PathName) {
   if (PathName.empty()) {
     return {};
   }
@@ -307,12 +308,10 @@ constexpr char ContainerManager[] = "/run/host/container-manager";
 fextl::string FindContainer() {
   // We only support pressure-vessel at the moment
   if (FHU::Filesystem::Exists(ContainerManager)) {
-    fextl::vector<char> Manager {};
+    fextl::string Manager {};
     if (FEXCore::FileLoading::LoadFile(Manager, ContainerManager)) {
       // Trim the whitespace, may contain a newline
-      fextl::string ManagerStr = Manager.data();
-      ManagerStr = FEXCore::StringUtils::Trim(ManagerStr);
-      return ManagerStr;
+      return FEXCore::StringUtils::Trim(Manager);
     }
   }
   return {};
@@ -321,12 +320,10 @@ fextl::string FindContainer() {
 fextl::string FindContainerPrefix() {
   // We only support pressure-vessel at the moment
   if (FHU::Filesystem::Exists(ContainerManager)) {
-    fextl::vector<char> Manager {};
+    fextl::string Manager {};
     if (FEXCore::FileLoading::LoadFile(Manager, ContainerManager)) {
       // Trim the whitespace, may contain a newline
-      fextl::string ManagerStr = Manager.data();
-      ManagerStr = FEXCore::StringUtils::Trim(ManagerStr);
-      if (strncmp(ManagerStr.data(), "pressure-vessel", Manager.size()) == 0) {
+      if (FEXCore::StringUtils::Trim(Manager) == "pressure-vessel") {
         // We are running inside of pressure vessel
         // Our $CMAKE_INSTALL_PREFIX paths are now inside of /run/host/$CMAKE_INSTALL_PREFIX
         return "/run/host/";

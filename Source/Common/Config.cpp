@@ -7,11 +7,12 @@
 #include <FEXCore/fextl/fmt.h>
 #include <FEXCore/fextl/map.h>
 #include <FEXCore/fextl/string.h>
+#include <FEXCore/fextl/vector.h>
 #include <FEXCore/Utils/Allocator.h>
 #include <FEXCore/Utils/FileLoading.h>
+#include <FEXCore/Utils/WildcardMatcher.h>
 #include <FEXHeaderUtils/Filesystem.h>
 #include <FEXHeaderUtils/SymlinkChecks.h>
-
 #include <cstring>
 #include <fmt/format.h>
 #include <functional>
@@ -28,7 +29,8 @@
 
 namespace FEX::Config {
 namespace JSON {
-  static void LoadJSonConfig(const fextl::string& Config, std::function<void(const char* Name, const char* ConfigSring)> Func) {
+  static void LoadJSonConfig(const fextl::string& Config, std::optional<fextl::string> AppName,
+                             std::function<void(const char* Name, const char* ConfigString)> Func) {
     fextl::vector<char> Data;
     if (!FEXCore::FileLoading::LoadFile(Data, Config)) {
       return;
@@ -48,21 +50,35 @@ namespace JSON {
       return;
     }
 
-    for (const json_t* ConfigItem = json_getChild(ConfigList); ConfigItem != nullptr; ConfigItem = json_getSibling(ConfigItem)) {
-      const char* ConfigName = json_getName(ConfigItem);
-      const char* ConfigString = json_getValue(ConfigItem);
+    fextl::vector<const json_t*> ConfigBlocks;
+    ConfigBlocks.push_back(ConfigList);
 
-      if (!ConfigName) {
-        LogMan::Msg::EFmt("JSON file '{}': Couldn't get config name for an item", Config);
-        return;
+    if (AppName) {
+      const json_t* OverrideList = json_getProperty(json, "AppOverrides");
+      if (OverrideList) {
+        for (const json_t* Item = json_getChild(OverrideList); Item != nullptr; Item = json_getSibling(Item)) {
+          const char* AppPattern = json_getName(Item);
+
+          // Find the first match, then break
+          if (FEXCore::Utils::Wildcard::Matches(AppPattern, *AppName)) {
+            ConfigBlocks.push_back(Item);
+            break;
+          }
+        }
       }
+    }
 
-      if (!ConfigString) {
-        LogMan::Msg::EFmt("JSON file '{}': Couldn't get value for config item '{}'", Config, ConfigName);
-        return;
+    for (auto ConfigBlock : ConfigBlocks) {
+      for (const json_t* ConfigItem = json_getChild(ConfigBlock); ConfigItem != nullptr; ConfigItem = json_getSibling(ConfigItem)) {
+        const char* ConfigName = json_getName(ConfigItem);
+        const char* ConfigString = json_getValue(ConfigItem);
+
+        if (!ConfigString) {
+          LogMan::Msg::EFmt("JSON file '{}': Couldn't get value for config item '{}'", Config, ConfigName);
+          return;
+        }
+        Func(ConfigName, ConfigString);
       }
-
-      Func(ConfigName, ConfigString);
     }
   }
 } // namespace JSON
@@ -167,22 +183,25 @@ protected:
 
 class MainLoader final : public OptionMapper {
 public:
-  explicit MainLoader(FEXCore::Config::LayerType Type);
-  explicit MainLoader(fextl::string ConfigFile);
+  explicit MainLoader(FEXCore::Config::LayerType Type, std::optional<fextl::string> AppName = std::nullopt);
+  explicit MainLoader(fextl::string ConfigFile, std::optional<fextl::string> AppName = std::nullopt);
   explicit MainLoader(FEXCore::Config::LayerType Type, std::string_view ConfigFile);
+  explicit MainLoader(FEXCore::Config::LayerType Type, std::string_view ConfigFile, std::optional<fextl::string> AppName = std::nullopt);
 
   void Load() override;
 
 private:
+  std::optional<fextl::string> AppName;
   fextl::string Config;
 };
 
 class AppLoader final : public OptionMapper {
 public:
-  explicit AppLoader(const fextl::string& Filename, FEXCore::Config::LayerType Type);
+  explicit AppLoader(const fextl::string& AppName, FEXCore::Config::LayerType Type);
   void Load();
 
 private:
+  const fextl::string AppName;
   fextl::string Config;
 };
 
@@ -221,12 +240,14 @@ void OptionMapper::MapNameToOption(const char* ConfigName, const char* ConfigStr
 #include <FEXCore/Config/ConfigOptions.inl>
 }
 
-MainLoader::MainLoader(FEXCore::Config::LayerType Type)
+MainLoader::MainLoader(FEXCore::Config::LayerType Type, std::optional<fextl::string> AppName)
   : OptionMapper(Type)
+  , AppName {AppName}
   , Config {FEXCore::Config::GetConfigFileLocation(Type == FEXCore::Config::LayerType::LAYER_GLOBAL_MAIN)} {}
 
-MainLoader::MainLoader(fextl::string ConfigFile)
+MainLoader::MainLoader(fextl::string ConfigFile, std::optional<fextl::string> AppName)
   : OptionMapper(FEXCore::Config::LayerType::LAYER_MAIN)
+  , AppName {AppName}
   , Config {std::move(ConfigFile)} {}
 
 
@@ -234,15 +255,21 @@ MainLoader::MainLoader(FEXCore::Config::LayerType Type, std::string_view ConfigF
   : OptionMapper(Type)
   , Config {ConfigFile} {}
 
+MainLoader::MainLoader(FEXCore::Config::LayerType Type, std::string_view ConfigFile, std::optional<fextl::string> AppName)
+  : OptionMapper(Type)
+  , AppName {AppName}
+  , Config {ConfigFile} {}
+
 void MainLoader::Load() {
   SetCurrentConfigFile(Config);
-  JSON::LoadJSonConfig(Config, [this](const char* Name, const char* ConfigString) { MapNameToOption(Name, ConfigString); });
+  JSON::LoadJSonConfig(Config, AppName, [this](const char* Name, const char* ConfigString) { MapNameToOption(Name, ConfigString); });
 }
 
-AppLoader::AppLoader(const fextl::string& Filename, FEXCore::Config::LayerType Type)
-  : OptionMapper(Type) {
+AppLoader::AppLoader(const fextl::string& AppName, FEXCore::Config::LayerType Type)
+  : OptionMapper(Type)
+  , AppName {AppName} {
   const bool Global = Type == FEXCore::Config::LayerType::LAYER_GLOBAL_STEAM_APP || Type == FEXCore::Config::LayerType::LAYER_GLOBAL_APP;
-  Config = FEXCore::Config::GetApplicationConfig(Filename, Global);
+  Config = FEXCore::Config::GetApplicationConfig(AppName, Global);
 
   // Immediately load so we can reload the meta layer
   Load();
@@ -250,7 +277,7 @@ AppLoader::AppLoader(const fextl::string& Filename, FEXCore::Config::LayerType T
 
 void AppLoader::Load() {
   SetCurrentConfigFile(Config);
-  JSON::LoadJSonConfig(Config, [this](const char* Name, const char* ConfigString) { MapNameToOption(Name, ConfigString); });
+  JSON::LoadJSonConfig(Config, AppName, [this](const char* Name, const char* ConfigString) { MapNameToOption(Name, ConfigString); });
 }
 
 EnvLoader::EnvLoader(char* const _envp[])
@@ -320,16 +347,16 @@ fextl::unique_ptr<FEXCore::Config::Layer> CreateGlobalMainLayer() {
   return fextl::make_unique<MainLoader>(FEXCore::Config::LayerType::LAYER_GLOBAL_MAIN);
 }
 
-fextl::unique_ptr<FEXCore::Config::Layer> CreateMainLayer(const fextl::string* File) {
+fextl::unique_ptr<FEXCore::Config::Layer> CreateMainLayer(const fextl::string* File, std::optional<fextl::string> AppName) {
   if (File) {
-    return fextl::make_unique<MainLoader>(*File);
+    return fextl::make_unique<MainLoader>(*File, std::move(AppName));
   } else {
-    return fextl::make_unique<MainLoader>(FEXCore::Config::LayerType::LAYER_MAIN);
+    return fextl::make_unique<MainLoader>(FEXCore::Config::LayerType::LAYER_MAIN, std::move(AppName));
   }
 }
 
-fextl::unique_ptr<FEXCore::Config::Layer> CreateUserOverrideLayer(std::string_view AppConfig) {
-  return fextl::make_unique<MainLoader>(FEXCore::Config::LayerType::LAYER_USER_OVERRIDE, AppConfig);
+fextl::unique_ptr<FEXCore::Config::Layer> CreateUserOverrideLayer(std::string_view AppConfig, std::optional<fextl::string> AppName) {
+  return fextl::make_unique<MainLoader>(FEXCore::Config::LayerType::LAYER_USER_OVERRIDE, AppConfig, AppName);
 }
 
 fextl::unique_ptr<FEXCore::Config::Layer> CreateAppLayer(const fextl::string& Filename, FEXCore::Config::LayerType Type) {
@@ -461,7 +488,7 @@ void LoadConfig(fextl::string ProgramName, char** const envp, const PortableInfo
   if (!IsPortable) {
     FEXCore::Config::AddLayer(CreateGlobalMainLayer());
   }
-  FEXCore::Config::AddLayer(CreateMainLayer());
+  FEXCore::Config::AddLayer(CreateMainLayer(nullptr, ProgramName.empty() ? std::nullopt : std::optional {ProgramName}));
 
   if (!ProgramName.empty()) {
     if (!IsPortable) {
@@ -489,7 +516,7 @@ void LoadConfig(fextl::string ProgramName, char** const envp, const PortableInfo
     }
 
     if (FHU::Filesystem::Exists(AppConfigStr)) {
-      FEXCore::Config::AddLayer(CreateUserOverrideLayer(AppConfigStr));
+      FEXCore::Config::AddLayer(CreateUserOverrideLayer(AppConfigStr, ProgramName.empty() ? std::nullopt : std::optional {ProgramName}));
     }
   }
 
@@ -633,17 +660,10 @@ fextl::string GetDataDirectory(bool Global, const PortableInformation& PortableI
 }
 
 fextl::string GetConfigDirectory(bool Global, const PortableInformation& PortableInfo) {
-#ifdef FEX_STEAM_SUPPORT
-  const char* SteamDataPath = getenv("STEAM_COMPAT_DATA_PATH");
-  if (SteamDataPath) {
-    return fextl::fmt::format("{}/fex-emu/", SteamDataPath);
-  }
-#endif
-
   const char* ConfigOverride = getenv("FEX_APP_CONFIG_LOCATION");
-  if (PortableInfo.IsPortable && (Global || !ConfigOverride)) {
-    return fextl::fmt::format("{}/fex-emu/", PortableInfo.InterpreterPath);
-  } else if (PortableInfo.IsPortable && ConfigOverride && !Global) {
+  if (PortableInfo.IsPortable && Global) {
+    return fextl::fmt::format("{}/../share/fex-emu/", PortableInfo.InterpreterPath);
+  } else if (ConfigOverride && !Global) {
     fextl::string AppConfigStr = ConfigOverride;
     if (FHU::Filesystem::IsRelative(AppConfigStr)) {
       AppConfigStr = PortableInfo.InterpreterPath + AppConfigStr;
@@ -651,6 +671,13 @@ fextl::string GetConfigDirectory(bool Global, const PortableInformation& Portabl
 
     return AppConfigStr;
   }
+
+#ifdef FEX_STEAM_SUPPORT
+  const char* SteamDataPath = getenv("STEAM_COMPAT_DATA_PATH");
+  if (SteamDataPath) {
+    return fextl::fmt::format("{}/fex-emu/", SteamDataPath);
+  }
+#endif
 
   fextl::string ConfigDir;
   if (Global) {

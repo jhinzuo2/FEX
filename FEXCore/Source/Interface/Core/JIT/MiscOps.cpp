@@ -73,8 +73,8 @@ DEF_OP(Break) {
   uint64_t Constant {};
   memcpy(&Constant, &State, sizeof(State));
 
-  LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::r1, Constant);
-  str(ARMEmitter::XReg::x1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData));
+  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Constant);
+  str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData));
 
   switch (Op->Reason.Signal) {
   case Core::FAULT_SIGILL:
@@ -168,7 +168,7 @@ DEF_OP(PushRoundingMode) {
   } else {
     LOGMAN_THROW_A_FMT(Op->RoundMode == 1 || Op->RoundMode == 2, "expect a valid round mode");
 
-    and_(ARMEmitter::Size::i64Bit, TMP1, Dest, ~(Op->RoundMode << 22));
+    and_(ARMEmitter::Size::i64Bit, TMP1, Dest, ~(3 << 22));
     orr(ARMEmitter::Size::i64Bit, TMP1, TMP1, (Op->RoundMode == 2 ? 1 : 2) << 22);
   }
 
@@ -210,6 +210,25 @@ DEF_OP(Print) {
   PopDynamicRegs();
 }
 
+DEF_OP(PrintMsg) {
+  auto Op = IROp->C<IR::IROp_PrintMsg>();
+
+  PushDynamicRegs(TMP1);
+  SpillStaticRegs(TMP1);
+
+  LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::r0, reinterpret_cast<uintptr_t>(Op->Value));
+  ldr(ARMEmitter::XReg::x1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.PrintMsgValue));
+
+  if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+    GenerateIndirectRuntimeCall<void, uint64_t>(ARMEmitter::Reg::r1);
+  } else {
+    blr(ARMEmitter::Reg::r1);
+  }
+
+  FillStaticRegs();
+  PopDynamicRegs();
+}
+
 DEF_OP(ProcessorID) {
   if (CTX->HostFeatures.SupportsCPUIndexInTPIDRRO) {
     mrs(GetReg(Node), ARMEmitter::SystemRegister::TPIDRRO_EL0);
@@ -227,7 +246,10 @@ DEF_OP(ProcessorID) {
   // Ordering is incredibly important here
   // We must spill any overlapping registers first THEN claim we are in a syscall without invalidating state at all
   // Only spill the registers that intersect with our usage
-  SpillStaticRegs(TMP1, false, SpillMask);
+  SpillStaticRegs(TMP1, {
+                          .GPRSpillMask = SpillMask,
+                          .FPRs = false,
+                        });
 
   // Now that we are spilled, store in the state that we are in a syscall
   // Still without overwriting registers that matter
@@ -260,11 +282,17 @@ DEF_OP(ProcessorID) {
   // Load the values returned by the kernel
   ldp<ARMEmitter::IndexType::OFFSET>(ARMEmitter::WReg::w0, ARMEmitter::WReg::w1, ARMEmitter::Reg::rsp);
   // Deallocate stack space
-  sub(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::rsp, 16);
+  add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::rsp, 16);
 
   // Now that we are done in the syscall we need to carefully peel back the state
   // First unspill the registers from before
-  FillStaticRegs(false, SpillMask, ~0U, ARMEmitter::Reg::r8, ARMEmitter::Reg::r2);
+
+  FillStaticRegs({
+    .OptionalReg = ARMEmitter::Reg::r8,
+    .OptionalReg2 = ARMEmitter::Reg::r2,
+    .GPRFillMask = SpillMask,
+    .FPRs = false,
+  });
 
   // Now the registers we've spilled are back in their original host registers
   // We can safely claim we are no longer in a syscall

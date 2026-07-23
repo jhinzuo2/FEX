@@ -55,6 +55,29 @@ DEF_OP(ExitFunction) {
 
   uint64_t NewRIP;
 
+  if constexpr (Context::BLOCK_DEBUGGING) {
+    // Skip block linking when BLOCK_DEBUGGING as it adds overhead and is unncessary.
+    // This is a debug only feature and doesn't need caching help.
+    bool IsInlineRIP = IsInlineConstant(Op->NewRIP, &NewRIP) || IsInlineEntrypointOffset(Op->NewRIP, &NewRIP);
+    ARMEmitter::ForwardLabel l_ExitLink;
+    if (IsInlineRIP) {
+      ldr(TMP1, &l_ExitLink);
+      str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
+    } else {
+      auto RipReg = GetReg(Op->NewRIP);
+      str(RipReg.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
+    }
+    ldr(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.DispatcherLoopTop));
+    br(TMP2);
+
+    if (IsInlineRIP) {
+      BindOrRestart(&l_ExitLink);
+      dc64(NewRIP);
+    }
+
+    return;
+  }
+
   if (IsInlineConstant(Op->NewRIP, &NewRIP) || IsInlineEntrypointOffset(Op->NewRIP, &NewRIP)) {
 #ifdef ARCHITECTURE_arm64ec
     if (NewRIP < EC_CODE_BITMAP_MAX_ADDRESS && RtlIsEcCode(NewRIP)) {
@@ -265,7 +288,10 @@ DEF_OP(Syscall) {
   uint32_t GPRSpillMask = ~0U;
   uint32_t FPRSpillMask = ~0U;
 
-  SpillStaticRegs(TMP1, true, GPRSpillMask, FPRSpillMask);
+  SpillStaticRegs(TMP1, {
+                          .GPRSpillMask = GPRSpillMask,
+                          .FPRSpillMask = FPRSpillMask,
+                        });
 
   // Now that we are spilled, store in the state that we are in a syscall
   // Still without overwriting registers that matter
@@ -299,7 +325,12 @@ DEF_OP(Syscall) {
 
   // Result is now in x0
   // Fix the stack and any values that were stepped on
-  FillStaticRegs(true, GPRSpillMask, FPRSpillMask, ARMEmitter::Reg::r1, ARMEmitter::Reg::r2);
+  FillStaticRegs({
+    .OptionalReg = ARMEmitter::Reg::r1,
+    .OptionalReg2 = ARMEmitter::Reg::r2,
+    .GPRFillMask = GPRSpillMask,
+    .FPRFillMask = FPRSpillMask,
+  });
 
   // Now the registers we've spilled are back in their original host registers
   // We can safely claim we are no longer in a syscall
@@ -322,7 +353,10 @@ DEF_OP(Thunk) {
   // X0: CTX
   // X1: Args (from guest stack)
 
-  SpillStaticRegs(TMP1); // spill to ctx before ra64 spill
+  // spill to ctx before ra64 spill
+  SpillStaticRegs(TMP1, {
+                          .NZCV = false,
+                        });
 
   PushDynamicRegs(TMP1);
 
@@ -337,7 +371,10 @@ DEF_OP(Thunk) {
 
   PopDynamicRegs();
 
-  FillStaticRegs(); // load from ctx after ra64 refill
+  // load from ctx after ra64 refill
+  FillStaticRegs({
+    .NZCV = false,
+  });
 }
 
 DEF_OP(ValidateCode) {

@@ -163,7 +163,7 @@ void OpDispatchBuilder::FIST(OpcodeArgs, bool Truncate) {
 
     // Check for NaN/Infinity: exponent = 0x7fff
     SaveNZCV();
-    _TestNZ(OpSize::i64Bit, Exponent, Constant(0x7fff));
+    SubWithFlags(OpSize::i64Bit, Exponent, 0x7fff);
     Ref IsSpecial = _NZCVSelect01(CondClass::EQ);
 
     // For overflow detection, check if exponent indicates a value >= 2^15
@@ -178,7 +178,8 @@ void OpDispatchBuilder::FIST(OpcodeArgs, bool Truncate) {
 
   Data = _F80CVTInt(Size, Data, Truncate);
 
-  StoreResultGPR_WithOpSize(Op, Op->Dest, Data, Size, OpSize::i8Bit);
+  StoreResultGPR_WithOpSize(Op, Op->Dest, Data, Size, OpSize::i8Bit,
+                            CTX->IsVectorAtomicTSOEnabled() ? MemoryAccessType::DEFAULT : MemoryAccessType::NONTSO);
 
   if ((Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0) {
     _PopStackDestroy();
@@ -574,7 +575,7 @@ void OpDispatchBuilder::X87FRSTOR(OpcodeArgs) {
   for (int i = 0; i < 7; ++i) {
     Ref Reg = _LoadMemFPR(OpSize::i128Bit, Mem, Constant((IR::OpSizeToSize(Size) * 7) + (10 * i)), OpSize::i8Bit, MemOffsetType::SXTX, 1);
     // Mask off the top bits
-    Reg = _VAnd(OpSize::i128Bit, OpSize::i128Bit, Reg, Mask);
+    Reg = _VAnd(OpSize::i128Bit, Reg, Mask);
     if (ReducedPrecisionMode) {
       // Convert to double precision
       Reg = _F80CVT(OpSize::i64Bit, Reg);
@@ -623,13 +624,10 @@ void OpDispatchBuilder::FXCH(OpcodeArgs) {
 
 void OpDispatchBuilder::X87FYL2X(OpcodeArgs, bool IsFYL2XP1) {
   if (IsFYL2XP1) {
-    // create an add between top of stack and 1.
-    Ref One = ReducedPrecisionMode ? _VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, Constant(0x3FF0000000000000)) :
-                                     LoadAndCacheNamedVectorConstant(OpSize::i128Bit, NamedVectorConstant::NAMED_VECTOR_X87_ONE);
-    _F80AddValue(0, One);
+    _F80FYL2XP1Stack();
+  } else {
+    _F80FYL2XStack();
   }
-
-  _F80FYL2XStack();
 }
 
 void OpDispatchBuilder::FCOMI(OpcodeArgs, IR::OpSize Width, bool Integer, OpDispatchBuilder::FCOMIFlags WhichFlags, bool PopTwice) {

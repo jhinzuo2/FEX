@@ -18,9 +18,8 @@ check_target_ec:
   // Check if target is in fact x86 code
   ldr x16, [x18, #0x60] // TEB->PEB
   ldr x16, [x16, #0x368] // PEB->EcCodeBitMap
-  lsr x17, x9, #15
-  and x17, x17, #0x1fffffffffff8
-  ldr x16, [x16, x17]
+  lsr x17, x9, #18
+  ldr x16, [x16, x17, lsl #3]
   lsr x17, x9, #12
   lsr x16, x16, x17
   tbnz x16, #0, ExitFunctionEC
@@ -64,12 +63,10 @@ ExitFunctionEC:
   strb wzr, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
   ldr x17, [x17, #0x20] // ChpeV2CpuAreaInfo->SuspendDoorbell
   ldr w17, [x17]
-  cbz w17, no_suspend
-.global ExitFunctionSuspendPoint
-ExitFunctionSuspendPoint:
-  brk #0xCAFE
-  // Will resume here
-no_suspend:
+  cbnz w17, ExitFunctionSuspendPoint
+
+.global ExitFunctionSuspendResumePoint
+ExitFunctionSuspendResumePoint:
   // Either return to an exit thunk (return to ARM64EC function) or call an entry thunk (call to ARM64EC function).
   // It is assumed that a 'blr x16' instruction is only ever used to call into x86 code from an exit thunk, and that all
   // exported ARM64EC functions have a 4-byte offset to their entry thunk immediately before their first instruction.
@@ -98,6 +95,11 @@ ret_sp_misaligned:
   adrp lr, X64ReturnInstr
   ldr lr, [lr, #:lo12:X64ReturnInstr]
   br x17
+
+.global ExitFunctionSuspendPoint
+ExitFunctionSuspendPoint:
+  brk #0xCAFE
+  // Resume will jump back to `ExitFunctionSuspendResumePoint`
 
   // Makes a wrapper for calling a system call directly, skipping the usual ntdll thunks
 #define HASH #

@@ -32,7 +32,6 @@
 #include <sys/personality.h>
 #include <sys/prctl.h>
 #include <sys/random.h>
-#include <linux/prctl.h>
 
 #define PAGE_START(x) ((x) & ~(uintptr_t)(4095))
 #define PAGE_OFFSET(x) ((x) & 4095)
@@ -298,15 +297,15 @@ public:
 #ifndef AT_FLAGS_PRESERVE_ARGV0
 #define AT_FLAGS_PRESERVE_ARGV0 1
 #endif
-    uint32_t HostKernel = FEX::HLE::SyscallHandler::CalculateHostKernelVersion();
-    if ((HostKernel >= FEX::HLE::SyscallHandler::KernelVersion(5, 12, 0) && (AtFlags & AT_FLAGS_PRESERVE_ARGV0)) || LoadedWithFD) {
+    uint32_t HostKernel = FEX::LinuxVersion::CalculateHostKernelVersion();
+    if ((HostKernel >= FEX::LinuxVersion::KernelVersion(5, 12, 0) && (AtFlags & AT_FLAGS_PRESERVE_ARGV0)) || LoadedWithFD) {
 
       // Erase the initial argument from the list in this case
       ApplicationArgs.erase(ApplicationArgs.begin());
     }
 
     // Append any additional arguments from config
-    const auto AdditionalArgs = AdditionalArguments.All();
+    const auto& AdditionalArgs = AdditionalArguments.All();
     ApplicationArgs.insert(ApplicationArgs.end(), AdditionalArgs.begin(), AdditionalArgs.end());
 
     if (!MainElf.InterpreterElf.empty() && !SkipInterpreter) {
@@ -336,7 +335,7 @@ public:
     }
 
     if (AdditionalEnvp) {
-      const auto EnvpList = AdditionalEnvp->All();
+      const auto& EnvpList = AdditionalEnvp->All();
       EnvironmentVariables.insert(EnvironmentVariables.end(), EnvpList.begin(), EnvpList.end());
     }
 
@@ -411,7 +410,7 @@ public:
 
     // Set the process personality here
     // Also, what about ADDR_LIMIT_3GB & co ?
-    uint32_t Personality = personality(~0ULL);
+    uint32_t Personality = personality(~0U);
     Personality |= ExecuteAll ? READ_IMPLIES_EXEC : 0;
     if (-1 == personality(Personality)) {
       LogMan::Msg::EFmt("Setting personality failed");
@@ -455,16 +454,16 @@ public:
     // On the upside, this more accurately emulates how the kernel allocates stack space for the application when hinting at the location.
     //
     void* StackPointerBase {};
-    auto VASize = FEXCore::Allocator::DetermineVASize();
+    auto VABits = FEXCore::Allocator::GetHostVABits();
     uint64_t StackHint {};
     if (Is64BitMode()) {
-      if (VASize > 47) {
+      if (VABits > 47) {
         // If VA size is at least as large as minimum x86 specification, then set to max.
-        VASize = 47;
+        VABits = 47;
       }
 
       // Calculate the highest point the stack could go.
-      StackHint = (1ULL << VASize) - FULL_STACK_SIZE;
+      StackHint = (1ULL << VABits) - FULL_STACK_SIZE;
     } else {
       // Needs to be under the 4GB VA space.
       StackHint = 0x1'0000'0000ULL - FULL_STACK_SIZE;
@@ -558,8 +557,8 @@ public:
       if (Is64BitMode()) {
         // Ensure that if we are running on a 36-bit VA system, we don't try hinting that an ELF should
         // live way outside the VA space.
-        uint64_t HostVASize = 1ULL << FEXCore::Allocator::DetermineVASize();
-        ELFLoadHint = std::min(HostVASize, TASK_SIZE_64) / 3 * 2;
+        uint64_t HostVABits = 1ULL << FEXCore::Allocator::GetHostVABits();
+        ELFLoadHint = std::min(HostVABits, TASK_SIZE_64) / 3 * 2;
       } else {
         ELFLoadHint = TASK_SIZE_32 / 3 * 2;
       }
@@ -646,6 +645,11 @@ public:
 
     if (Is64BitMode()) {
       AuxVariables.emplace_back(auxv_t {4, 0x38}); // AT_PHENT
+
+      // 64-bit vsyscall entry points are hardcoded to a single page at 0xffffffffff600000.
+      // FEX can't actually map anything there so it is a hardcoded quirk, similar to how the kernel traps these executions.
+      // Just track it as a mapped anonymous executable page.
+      Handler->AddVirtualPage(Thread, 0xFFFFFFFFFF600000ULL, FEXCore::Utils::FEX_PAGE_SIZE, PROT_READ | PROT_EXEC);
     } else {
       AuxVariables.emplace_back(auxv_t {4, 0x20}); // AT_PHENT
 
@@ -767,25 +771,37 @@ public:
     // Ensure we don't read past the end into garbage data
     stat_buffer[std::clamp(bytes_read, 0L, static_cast<ssize_t>(sizeof(stat_buffer)) - 1)] = '\0';
 
+    uint64_t start_code, end_code, start_stack, start_data, end_data, start_brk, arg_start, arg_end, env_start, env_end;
+
     // See man proc_pid_stat
     int items_read = sscanf(stat_buffer,
-                            "%*d %*s %*c %*d %*d "      // 1 to 5
-                            "%*d %*d %*d %*u %*u "      // 6 to 10
-                            "%*u %*u %*u %*u %*u "      // 11 to 15
-                            "%*d %*d %*d %*d %*d "      // 16 to 20
-                            "%*d %*u %*u %*d %*u "      // 21 to 25
-                            "%llu %llu %llu %*u %*u "   // 26 to 30
-                            "%*u %*u %*u %*u %*u "      // 31 to 35
-                            "%*u %*u %*d %*d %*u "      // 36 to 40
-                            "%*u %*u %*u %*d %llu "     // 40 to 45
-                            "%llu %llu %llu %llu %llu " // 46 to 50
-                            "%llu",                     // 51
-                            &map.start_code, &map.end_code, &map.start_stack, &map.start_data, &map.end_data, &map.start_brk,
-                            &map.arg_start, &map.arg_end, &map.env_start, &map.env_end);
+                            "%*d %*s %*c %*d %*d " // 1 to 5
+                            "%*d %*d %*d %*u %*u " // 6 to 10
+                            "%*u %*u %*u %*u %*u " // 11 to 15
+                            "%*d %*d %*d %*d %*d " // 16 to 20
+                            "%*d %*u %*u %*d %*u " // 21 to 25
+                            "%lu %lu %lu %*u %*u " // 26 to 30
+                            "%*u %*u %*u %*u %*u " // 31 to 35
+                            "%*u %*u %*d %*d %*u " // 36 to 40
+                            "%*u %*u %*u %*d %lu " // 40 to 45
+                            "%lu %lu %lu %lu %lu " // 46 to 50
+                            "%lu",                 // 51
+                            &start_code, &end_code, &start_stack, &start_data, &end_data, &start_brk, &arg_start, &arg_end, &env_start, &env_end);
 
     if (items_read != 10) {
       return false;
     }
+
+    map.start_code = start_code;
+    map.end_code = end_code;
+    map.start_stack = start_stack;
+    map.start_data = start_data;
+    map.end_data = end_data;
+    map.start_brk = start_brk;
+    map.arg_start = arg_start;
+    map.arg_end = arg_end;
+    map.env_start = env_start;
+    map.env_end = env_end;
 
     map.brk = reinterpret_cast<uint64_t>(sbrk(0));
 

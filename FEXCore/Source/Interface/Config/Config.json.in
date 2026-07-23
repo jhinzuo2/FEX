@@ -23,6 +23,13 @@
           "Enable the code caching subsystem"
         ]
       },
+      "EnableLazyCodeCachingWIP": {
+        "Type": "bool",
+        "Default": "false",
+        "Desc": [
+          "Enable lazy loading of chunks in code caches"
+        ]
+      },
       "EnableCodeCacheValidation": {
         "Type": "bool",
         "Default": "false",
@@ -75,7 +82,9 @@
           "ENABLE3DNOW": "enable3dnow",
           "DISABLE3DNOW": "disable3dnow",
           "ENABLESSE4A": "enablesse4a",
-          "DISABLESSE4A": "disablesse4a"
+          "DISABLESSE4A": "disablesse4a",
+          "ENABLEMOPS": "enablemops",
+          "DISABLEMOPS": "disablemops"
         },
         "Desc": [
           "Allows controlling of the CPU features in the JIT.",
@@ -99,7 +108,8 @@
           "\t{enable,disable}preserveallabi: Will force enable or disable preserve_all abi even if the host doesn't support it",
           "\t{enable,disable}wfxt: Will force enable or disable wfxt even if the host doesn't support it",
           "\t{enable,disable}3dnow: Will force enable or disable 3DNow! even if the host doesn't support it",
-          "\t{enable,disable}sse4a: Will force enable or disable SSE4a even if the host doesn't support it"
+          "\t{enable,disable}sse4a: Will force enable or disable SSE4a even if the host doesn't support it",
+          "\t{enable,disable}mops: Will force enable or disable FEAT_MOPS even if the host doesn't support it"
         ]
       },
       "SmallTSCScale": {
@@ -192,7 +202,7 @@
       },
       "DisableL2Cache": {
         "Type": "bool",
-        "Default": "false",
+        "Default": "true",
         "Desc": [
           "Disables FEXCore's JIT L2 cache lookup. Saving memory.",
           "Can potentially introduce more stutters."
@@ -200,7 +210,7 @@
       },
       "DynamicL1Cache": {
         "Type": "bool",
-        "Default": "false",
+        "Default": "true",
         "Desc": [
           "Switches FEXCore's JIT L1 cache to be dynamically sized. Saving memory.",
           "Can potentially introduce more stutters."

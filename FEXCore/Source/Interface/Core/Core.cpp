@@ -30,7 +30,7 @@ $end_info$
 #include "Interface/IR/RegisterAllocationData.h"
 #include "Utils/Allocator.h"
 #include "Utils/Allocator/HostAllocator.h"
-#include "Utils/SpinWaitLock.h"
+#include <FEXCore/Utils/SpinWaitLock.h>
 #include "Utils/variable_length_integer.h"
 
 #include <FEXCore/Config/Config.h>
@@ -342,6 +342,11 @@ void ContextImpl::SetFlagsFromCompactedEFLAGS(FEXCore::Core::InternalThreadState
 }
 
 bool ContextImpl::InitCore() {
+  if (CodeCache.IsGeneratingCache || FEXCore::Config::Get_ENABLECODECACHINGWIP()) {
+    // Start with a larger code buffer to avoid resizes that would discard code
+    StartMaximalCodeBuffer();
+  }
+
   // Initialize the CPU core signal handlers & DispatcherConfig
   Dispatcher = FEXCore::CPU::Dispatcher::Create(this);
 
@@ -356,6 +361,16 @@ bool ContextImpl::InitCore() {
   if (Config.GdbServer) {
     // If gdbserver is enabled then this needs to be enabled.
     Config.NeedsPendingInterruptFaultCheck = true;
+  }
+
+  if constexpr (BLOCK_DEBUGGING) {
+    // If the developer wants to do any single-stepping points or watch points.
+    // Add them here.
+    //
+    // eg:
+    // BlockDebuggerTracker.AllTargetSingleStep();
+    // BlockDebuggerTracker.AddSingleStepTarget(0x14000'0000ULL);
+    // BlockDebuggerTracker.AddWriteWatchPoint(0x420BA5ED);
   }
 
   return true;
@@ -376,11 +391,11 @@ void ContextImpl::ExecuteThread(FEXCore::Core::InternalThreadState* Thread) {
 }
 
 void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread) {
-  Thread->OpDispatcher = fextl::make_unique<FEXCore::IR::OpDispatchBuilder>(this);
+  Thread->OpDispatcher = fextl::make_unique<FEXCore::IR::OpDispatchBuilder>(this, Thread);
   Thread->OpDispatcher->SetMultiblock(Config.Multiblock);
   Thread->LookupCache = fextl::make_unique<FEXCore::LookupCache>(this);
   Thread->FrontendDecoder = fextl::make_unique<FEXCore::Frontend::Decoder>(Thread);
-  Thread->PassManager = fextl::make_unique<FEXCore::IR::PassManager>();
+  Thread->PassManager = fextl::make_unique<FEXCore::IR::PassManager>(this);
 
   Thread->CurrentFrame->State.L1Pointer = Thread->LookupCache->GetL1Pointer();
   Thread->CurrentFrame->State.L1Mask = Thread->LookupCache->GetScaledL1PointerMask();
@@ -389,15 +404,11 @@ void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread)
 
   Dispatcher->InitThreadPointers(Thread);
 
-  Thread->PassManager->AddDefaultPasses(this);
-  Thread->PassManager->AddDefaultValidationPasses();
-
-  Thread->PassManager->RegisterSyscallHandler(SyscallHandler);
-
   // Create CPU backend
-  Thread->PassManager->InsertRegisterAllocationPass(this);
   Thread->CPUBackend = FEXCore::CPU::CreateArm64JITCore(this, Thread);
 
+  // We finalize *after* the CPU backend is initialized, as the CPU backend will
+  // provide necessary register information to the register allocation pass.
   Thread->PassManager->Finalize();
 }
 
@@ -456,7 +467,6 @@ void ContextImpl::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThread
     if (Config.StrictInProcessSplitLocks) {
       FEXCore::Utils::SpinWaitLock::unlock(&StrictSplitLockMutex);
     }
-    return;
   }
 }
 
@@ -471,7 +481,7 @@ void ContextImpl::LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) {
 
 void ContextImpl::OnCodeBufferAllocated(const fextl::shared_ptr<CPU::CodeBuffer>& Buffer) {
   if (Config.GlobalJITNaming()) {
-    Symbols.RegisterJITSpace(Buffer->Ptr, Buffer->Size);
+    Symbols.RegisterJITSpace(Buffer->Ptr, Buffer->AllocatedSize);
   }
 
   {
@@ -496,17 +506,20 @@ void ContextImpl::ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, boo
 
 static void IRDumper(FEXCore::Core::InternalThreadState* Thread, IR::IREmitter* IREmitter, uint64_t GuestRIP) {
   FEXCore::File::File FD = FEXCore::File::File::GetStdERR();
-  fextl::stringstream out;
+  fextl::ostringstream out;
   auto NewIR = IREmitter->ViewIR();
   FEXCore::IR::Dump(&out, &NewIR);
   fextl::fmt::print(FD, "IR-ShouldDump-{} 0x{:x}:\n{}\n@@@@@\n", NewIR.PostRA() ? "post" : "pre", GuestRIP, out.str());
-};
+}
+
+bool ContextImpl::CheckIfBlockIsCacheable(FEXCore::Core::InternalThreadState& Thread, uint64_t GuestRIP, uint64_t MaxInst) {
+  return Thread.FrontendDecoder->CheckIfCacheable(Thread, reinterpret_cast<const uint8_t*>(GuestRIP), GuestRIP, MaxInst);
+}
 
 ContextImpl::GenerateIRResult
 ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, bool ExtendedDebugInfo, uint64_t MaxInst) {
   FEXCORE_PROFILE_SCOPED("GenerateIR");
 
-  Thread->OpDispatcher->ReownOrClaimBuffer();
   Thread->OpDispatcher->ResetWorkingList();
 
   uint64_t TotalInstructions {0};
@@ -526,18 +539,14 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
   }
 
   if (!HasCustomIR) {
-    const uint8_t* GuestCode {};
-    GuestCode = reinterpret_cast<const uint8_t*>(GuestRIP);
-
-    bool HadDispatchError {false};
-    bool HadInvalidInst {false};
+    const auto* GuestCode = reinterpret_cast<const uint8_t*>(GuestRIP);
 
     Thread->FrontendDecoder->DecodeInstructionsAtEntry(Thread, GuestCode, GuestRIP, MaxInst);
 
-    auto BlockInfo = Thread->FrontendDecoder->GetDecodedBlockInfo();
-    auto CodeBlocks = &BlockInfo->Blocks;
+    const auto* BlockInfo = Thread->FrontendDecoder->GetDecodedBlockInfo();
+    const auto& CodeBlocks = BlockInfo->Blocks;
 
-    Thread->OpDispatcher->BeginFunction(GuestRIP, CodeBlocks, BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode,
+    Thread->OpDispatcher->BeginFunction(GuestRIP, &CodeBlocks, BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode,
                                         AreMonoHacksActive() && MonoBackpatcherBlock.load(std::memory_order_relaxed) == GuestRIP);
 
     const auto GPRSize = Thread->OpDispatcher->GetGPROpSize();
@@ -551,11 +560,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
     }
 #endif
 
-    for (size_t j = 0; j < CodeBlocks->size(); ++j) {
-      const FEXCore::Frontend::Decoder::DecodedBlocks& Block = CodeBlocks->at(j);
+    for (size_t j = 0; j < CodeBlocks.size(); ++j) {
+      const auto& Block = CodeBlocks[j];
+
+      // Dispatch failures and invalid instructions terminate only the decoded
+      // block that contains them. Other block targets in the same multiblock
+      // compilation unit are independent entry paths.
+      bool HadDispatchError {false};
+      bool HadInvalidInst {false};
 
 #ifdef ZYDIS_DISASSEMBLER
-      if (FEXCore::Config::Get_X86DISASSEMBLE() && CodeBlocks->size() > 1) {
+      if (FEXCore::Config::Get_X86DISASSEMBLE() && CodeBlocks.size() > 1) {
         LogMan::Msg::IFmt("  Block {} Entry={:#x} NumInsts={}", j, Block.Entry, Block.NumInstructions);
       }
 #endif
@@ -563,7 +578,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
       bool BlockInForceTSOValidRange = false;
       auto InstForceTSOIt = ForceTSOInstructions.end();
       if (ForceTSOValidRanges.Contains({Block.Entry, Block.Entry + Block.Size})) {
-        if (auto It = ForceTSOInstructions.lower_bound(Block.Entry); *It < Block.Entry + Block.Size) {
+        if (auto It = ForceTSOInstructions.lower_bound(Block.Entry); It != ForceTSOInstructions.end() && *It < Block.Entry + Block.Size) {
           InstForceTSOIt = It;
           BlockInForceTSOValidRange = true;
         }
@@ -572,18 +587,16 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
       // Set the block entry point
       Thread->OpDispatcher->SetNewBlockIfChanged(Block.Entry);
 
-      uint64_t BlockInstructionsLength {};
-
       // Reset any block-specific state
       Thread->OpDispatcher->StartNewBlock();
 
-      uint64_t InstsInBlock = Block.NumInstructions;
-
+      const uint64_t InstsInBlock = Block.NumInstructions;
       if (InstsInBlock == 0) {
         // Special case for an empty instruction block.
         Thread->OpDispatcher->ExitFunction(Thread->OpDispatcher->_InlineEntrypointOffset(GPRSize, Block.Entry - GuestRIP));
       }
 
+      uint64_t BlockInstructionsLength {};
       for (size_t i = 0; i < InstsInBlock; ++i) {
         uint64_t InstAddress = Block.Entry + BlockInstructionsLength;
         const FEXCore::X86Tables::X86InstInfo* TableInfo {nullptr};
@@ -638,6 +651,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           Thread->OpDispatcher->SetTrueJumpTarget(InvalidateCodeCond, CodeWasChangedBlock);
 
           Thread->OpDispatcher->SetCurrentCodeBlock(CodeWasChangedBlock);
+          Thread->OpDispatcher->StartNewBlock();
           Thread->OpDispatcher->_ThreadRemoveCodeEntry();
           Thread->OpDispatcher->ExitFunction(Thread->OpDispatcher->_InlineEntrypointOffset(GPRSize, InstAddress - GuestRIP));
 
@@ -645,6 +659,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
           Thread->OpDispatcher->SetFalseJumpTarget(InvalidateCodeCond, NextOpBlock);
           Thread->OpDispatcher->SetCurrentCodeBlock(NextOpBlock);
+          Thread->OpDispatcher->StartNewBlock();
         }
 
         if (TableInfo && TableInfo->OpcodeDispatcher.OpDispatch) {
@@ -692,6 +707,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
             if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::INVALID_INST ||
                 Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::BAD_RELOCATION) {
               Thread->OpDispatcher->InvalidOp(DecodedInfo);
+            } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
+              Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
             } else {
               Thread->OpDispatcher->NoExecOp(DecodedInfo);
             }
@@ -706,8 +723,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         // If we had a dispatch error then leave early
         if (HadDispatchError && TotalInstructions == 0) {
           // Couldn't handle any instruction in op dispatcher
-          Thread->OpDispatcher->ResetWorkingList();
-          return {{}, 0, 0, 0, 0};
+          Thread->OpDispatcher->DelayedDisownBuffer();
+          return {std::nullopt, 0, 0, 0, 0};
         }
 
         if (NeedsBlockEnd) {
@@ -774,6 +791,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
   auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges] =
     GenerateIR(Thread, GuestRIP, Config.GDBSymbols(), MaxInst);
   if (!IRView) {
+    // OpDispatcher IR already released in this case.
     return {{}, nullptr, 0, 0, false};
   }
 
@@ -784,6 +802,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
   // as expensive and are easily reverted.
   if (MaxInst != 1) {
     if (auto Block = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
+      // Raced to compile, release the OpDispatcher IR.
       Thread->OpDispatcher->DelayedDisownBuffer();
       return {.CompiledCode = {.BlockBegin = reinterpret_cast<uint8_t*>(Block), .EntryPoints = {{GuestRIP, reinterpret_cast<uint8_t*>(Block)}}},
               .DebugData = nullptr,
@@ -813,6 +832,17 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
 }
 
 uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst) {
+  if constexpr (BLOCK_DEBUGGING) {
+    // Block debugging logic is hand-written and needs to be handled with care.
+    // Force MaxInst to only be one in this case.
+    MaxInst = 1;
+
+    // If the entrypoint is part of the single step targets then single step it.
+    if (BlockDebuggerTracker.IsSingleStepTarget(GuestRIP)) {
+      return CompileSingleStep(Frame, GuestRIP);
+    }
+  }
+
   auto Thread = Frame->Thread;
   FEXCORE_PROFILE_SCOPED("CompileBlock");
   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedJITTime);

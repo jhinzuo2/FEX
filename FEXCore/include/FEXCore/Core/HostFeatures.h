@@ -5,13 +5,20 @@
 #include <cstdint>
 
 namespace FEXCore {
+
+/**
+ * @brief Backend features that change how codegen is generated from IR
+ *
+ * Specifically things that affect the IR->Codegen process
+ * Not the x86->IR process
+ */
 struct HostFeatures {
-  /**
-   * @brief Backend features that change how codegen is generated from IR
-   *
-   * Specifically things that affect the IR->Codegen process
-   * Not the x86->IR process
-   */
+  // Whether or not the host supports any kind of SVE implementation.
+  [[nodiscard]]
+  bool SupportsSVE() const {
+    return SupportsSVE128 || SupportsSVE256;
+  }
+
   uint32_t DCacheLineSize {};
   uint32_t ICacheLineSize {};
   bool SupportsCacheMaintenanceOps {};
@@ -41,10 +48,21 @@ struct HostFeatures {
   bool SupportsWFXT {};
   bool Supports3DNow {};
   bool SupportsSSE4a {};
+  bool SupportsMOPS {};
+  bool PreferZVAForVZero {};
 
   // Float exception behaviour
   bool SupportsAFP {};
   bool SupportsFloatExceptions {};
+
+  // Changes code generation slightly.
+  enum class HostTypeEnum {
+    Unknown,
+    Linux,
+    Wow64,
+    Arm64ec,
+  };
+  HostTypeEnum HostType {};
 
   // Flag if this is InstCountCI
   bool IsInstCountCI {};

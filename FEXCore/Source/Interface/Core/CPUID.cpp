@@ -92,6 +92,7 @@ namespace ProductNames {
   static const char ARM_AppleSilicon[] = "Apple Silicon";
 
   static const char ARM_ORYON_1[] = "Oryon-1";
+  static const char ARM_ORYON_3[] = "Oryon-3";
   static const char ARM_Ampere_1[] = "AmpereOne";
   static const char ARM_Ampere_1A[] = "AmpereOneA";
   static const char ARM_Ampere_1B[] = "AmpereOneB";
@@ -99,7 +100,7 @@ namespace ProductNames {
 #endif
 } // namespace ProductNames
 
-uint32_t GetCPUID_Syscall() {
+static uint32_t GetCPUID_Syscall() {
   uint32_t CPU {};
   FHU::Syscalls::getcpu(&CPU, nullptr);
   return CPU;
@@ -141,13 +142,13 @@ constexpr uint32_t FAMILY_IDENTIFIER = GenerateFamily(CPUFamily {
 #endif
 
 #ifdef ARCHITECTURE_arm64
-uint32_t GetCycleCounterFrequency() {
+uint64_t GetCycleCounterFrequency() {
   uint64_t Result {};
   __asm("mrs %[Res], CNTFRQ_EL0" : [Res] "=r"(Result));
   return Result;
 }
 
-uint32_t GetCPUID_TPIDRRO() {
+static uint32_t GetCPUID_TPIDRRO() {
   uint64_t Result {};
   __asm("mrs %[Res], TPIDRRO_EL0" : [Res] "=r"(Result));
   return Result;
@@ -186,8 +187,9 @@ void CPUIDEmu::SetupHostHybridFlag() {
   // CPU priority order
   // This is mostly arbitrary but will sort by some sort of CPU priority by performance
   // Relative list so things they will commonly end up in big.little configurations sort of relate
-  static constexpr std::array<CPUMIDR, 67> CPUMIDRs = {{
+  static constexpr std::array<CPUMIDR, 68> CPUMIDRs = {{
     // Typically big CPU cores
+    {0x51, 0x002, 1, ProductNames::ARM_ORYON_3}, // Qualcomm Oryon-3
     {0x51, 0x001, 1, ProductNames::ARM_ORYON_1}, // Qualcomm Oryon-1
 
     {0x61, 0x039, 1, ProductNames::ARM_Avalanche_M2Max}, // Apple Avalanche (M2 Max)
@@ -314,9 +316,8 @@ void CPUIDEmu::SetupHostHybridFlag() {
 
         // Walk our list of CPUMIDRs to find the most little core
         for (size_t j = LowestMIDRIdx; j < CPUMIDRs.size(); ++j) {
-          auto& MIDROption = CPUMIDRs[i];
+          const auto& MIDROption = CPUMIDRs[j];
           if ((MIDROption.Implementer == Implementer && MIDROption.Part == Part) || (MIDROption.Implementer == 0 && MIDROption.Part == 0)) {
-
             LowestMIDRIdx = j;
             LowestMIDR = MIDR;
             break;
@@ -408,7 +409,7 @@ void CPUIDEmu::SetupHostHybridFlag() {
 }
 
 #else
-uint32_t GetCycleCounterFrequency() {
+uint64_t GetCycleCounterFrequency() {
   return 0;
 }
 
@@ -648,6 +649,13 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_06h(uint32_t Leaf) const {
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_07h(uint32_t Leaf) const {
   FEXCore::CPUID::FunctionResults Res {};
   if (Leaf == 0) {
+#ifndef _WIN32
+    constexpr uint32_t SUPPORTS_RDPID = 1;
+#else
+    // RDPID under WIN32 is only supported if CPUIndex is available in TPIDRRO.
+    const uint32_t SUPPORTS_RDPID = SupportsCPUIndexInTPIDRRO;
+#endif
+
     // Disable Enhanced REP MOVS when TSO is enabled.
     // vcruntime140 memmove will use `rep movsb` in this case which completely destroys perf in Hades(appId 1145360)
     // This is due to LRCPC performance on Cortex being abysmal.
@@ -713,7 +721,7 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_07h(uint32_t Leaf) const {
               (0 << 19) |                               // MPX MAWAU
               (0 << 20) |                               // MPX MAWAU
               (0 << 21) |                               // MPX MAWAU
-              (1 << 22) |                               // RDPID Read Processor ID
+              (SUPPORTS_RDPID << 22) |                  // RDPID Read Processor ID
               (0 << 23) |                               // AES Key Locker
               (1 << 24) |                               // bus-lock-detect
               (0 << 25) |                               // CLDEMOTE
@@ -756,6 +764,95 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_07h(uint32_t Leaf) const {
               (0 << 29) |                  // Arch capabilities - Speculative side channel mitigations
               (0 << 30) |                  // Arch capabilities - MSR module specific
               (0 << 31);                   // SSBD - Speculative Store Bypass Disable
+  } else if (Leaf == 1) {
+    Res.eax = (0U << 0) |  // SHA512
+              (0U << 1) |  // SM3
+              (0U << 2) |  // SM4
+              (0U << 3) |  // RAO_INT
+              (0U << 4) |  // AVX_VNNI
+              (0U << 5) |  // AVX512_BF16
+              (0U << 6) |  // LASS (Linear Address Space Separation)
+              (0U << 7) |  // CMPCCXADD
+              (0U << 8) |  // ARCH_PERFMON_EXT
+              (0U << 9) |  // Reserved
+              (0U << 10) | // FAST_REP_MOVSB
+              (0U << 11) | // FAST_REP_STOSB
+              (0U << 12) | // FAST_REP_CMPSB_SCASB
+              (0U << 13) | // Reserved
+              (0U << 14) | // Reserved
+              (0U << 15) | // Reserved
+              (0U << 16) | // Reserved
+              (0U << 17) | // FRED (Flexible Return and Event Delivery)
+              (0U << 18) | // LKGS (Load into Kernel GS Base)
+              (0U << 19) | // WRMSRNS
+              (0U << 20) | // NMI_SRC
+              (0U << 21) | // AMX_FP16
+              (0U << 22) | // HRESET
+              (0U << 23) | // AVX_IFMA
+              (0U << 24) | // Reserved
+              (0U << 25) | // Reserved
+              (0U << 26) | // LAM (Linear Address Masking)
+              (0U << 27) | // MSRLIST
+              (0U << 28) | // Reserved
+              (0U << 29) | // Reserved
+              (0U << 30) | // INVD_DISABLE_POST_BIOS_DONE
+              (0U << 31);  // MOVRS
+
+    // Bits 4-31 currently reserved.
+    Res.ebx = (0U << 0) | // PPIN
+              (0U << 1) | // PBNDKB
+              (0U << 2) | // Reserved
+              (0U << 3);  // CPUIDMAXVAL_LIM_RMV
+
+    // Bits 6-31 also reserved.
+    Res.ecx = (0U << 0) | // RDT_M_ASYM
+              (0U << 1) | // RDT_A_ASYM
+              (0U << 2) | // Reserved
+              (0U << 3) | // Reserved
+              (0U << 4) | // Reserved
+              (0U << 5);  // MSR_IMM
+
+    // Bits 25-31 also reserved.
+    Res.edx = (0U << 0) |  // Reserved
+              (0U << 1) |  // Reserved
+              (0U << 2) |  // Reserved
+              (0U << 3) |  // Reserved
+              (0U << 4) |  // AVX_VNNI_INT8
+              (0U << 5) |  // AVX_NE_CONVERT
+              (0U << 6) |  // Reserved
+              (0U << 7) |  // Reserved
+              (0U << 8) |  // AMX_COMPLEX
+              (0U << 9) |  // Reserved
+              (0U << 10) | // AVX_VNNI_INT16
+              (0U << 11) | // Reserved
+              (0U << 12) | // Reserved
+              (0U << 13) | // UTMR (User-timer events)
+              (0U << 14) | // PREFETCHI
+              (0U << 15) | // USER_MSR
+              (0U << 16) | // Reserved
+              (0U << 17) | // UIRET_UIF
+              (0U << 18) | // CET_SSS
+              (0U << 19) | // AVX10
+              (0U << 20) | // Reserved
+              (0U << 21) | // APX_F
+              (0U << 22) | // SEC-TEE_ATTESTATION
+              (0U << 23) | // MWAIT
+              (0U << 24);  // SLSM (Static LSM)
+  } else if (Leaf == 2) {
+    // All bits are reserved except for EDX
+    Res.eax = 0;
+    Res.ebx = 0;
+    Res.ecx = 0;
+
+    // Bits 8-31 are reserved.
+    Res.edx = (0U << 0) | // PSFD
+              (0U << 1) | // IPRED_CTRL
+              (0U << 2) | // RRSBA_CTRL
+              (0U << 3) | // DDPD_U
+              (0U << 4) | // BHI_CTRL
+              (0U << 5) | // MCDT_NO
+              (0U << 6) | // UC_LOCK_DISABLE
+              (0U << 7);  // MONITOR_MITG_NO
   }
 
   return Res;
@@ -813,7 +910,7 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_0Dh(uint32_t Leaf) const {
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_15h(uint32_t Leaf) const {
   FEXCore::CPUID::FunctionResults Res {};
   // TSC frequency = ECX * EBX / EAX
-  uint32_t FrequencyHz = GetCycleCounterFrequency();
+  uint64_t FrequencyHz = GetCycleCounterFrequency();
   if (FrequencyHz) {
     Res.eax = 1;
     Res.ebx = 1U << CTX->Config.TSCScale;
@@ -831,6 +928,27 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_1Ah(uint32_t Leaf) const {
     // 0x20 is a little CPU
     Res.eax |= (Data.IsBig ? 0x40 : 0x20) << 24;
   }
+  return Res;
+}
+
+FEXCore::CPUID::FunctionResults CPUIDEmu::Function_24h(uint32_t Leaf) const {
+  FEXCore::CPUID::FunctionResults Res {};
+
+  if (Leaf == 0) {
+    // EAX indicates the maximum number of subleaves.
+    Res.eax = 0;
+
+    // Bits 19-31 reserved
+    // NOTE: We return all zero here until we have a CPU with AVX10
+    //       even if some of the fields otherwise have fixed values.
+    Res.ebx = (0U << 0) | // (bits 0-7 specify the vector ISA version)
+              (0U << 16); // Defined as always 0b111
+
+    // All bits reserved
+    Res.ecx = 0;
+    Res.edx = 0;
+  }
+
   return Res;
 }
 

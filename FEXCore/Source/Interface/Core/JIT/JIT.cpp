@@ -68,6 +68,10 @@ PrintValue(uint64_t Value) {
   LogMan::Msg::DFmt("Value: 0x{:x}", Value);
 }
 
+static void PrintMsg(const char* Value) {
+  LogMan::Msg::DFmt("{}", Value);
+}
+
 static void PrintVectorValue(uint64_t Value, uint64_t ValueUpper) {
   LogMan::Msg::DFmt("Value: 0x{:016x}'{:016x}", ValueUpper, Value);
 }
@@ -133,8 +137,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       fmov(VTMP1.S(), Src1.S());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -151,8 +155,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       fmov(VTMP1.D(), Src1.D());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -176,8 +180,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
         mov(ARMEmitter::Size::i32Bit, TMP2, Src1);
       }
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -194,8 +198,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -212,8 +216,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -230,8 +234,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       fmov(VTMP1.D(), Src1.D());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -254,8 +258,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
 
       fmov(VTMP1.D(), Src1.D());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -276,8 +280,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       fmov(VTMP1.D(), Src1.D());
       fmov(VTMP2.D(), Src2.D());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -294,8 +298,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -312,8 +316,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -330,8 +334,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -351,8 +355,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       mov(VTMP1.Q(), Src1.Q());
       mov(VTMP2.Q(), Src2.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -369,8 +373,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       const auto Src1 = GetVReg(IROp->Args[0]);
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -394,8 +398,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
 
       mov(VTMP1.Q(), Src1.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -416,8 +420,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       mov(VTMP1.Q(), Src1.Q());
       mov(VTMP2.Q(), Src2.Q());
 
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP1);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -434,8 +438,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       // tmp2 (x1/x11): source 2
       // tmp3 (x2/x12): source 3
       const auto Op = IROp->C<IR::IROp_VPCMPESTRX>();
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP1, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP1, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
 
       stp<ARMEmitter::IndexType::PRE>(TMP1, ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
 
@@ -476,8 +480,8 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       mov(VTMP2.Q(), Src2.Q());
       movz(ARMEmitter::Size::i32Bit, TMP1, Control);
 
-      ldr(TMP2, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].ABIHandler));
-      ldr(TMP4, STATE_PTR(CpuStateFrame, Pointers.FallbackHandlerPointers[Info.HandlerIndex].Func));
+      ldr(TMP2, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, ABIHandler));
+      ldr(TMP4, FALLBACK_HANDLER_OFFSET(Info.HandlerIndex, Func));
       blr(TMP2);
 
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
@@ -618,7 +622,7 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
   , HostSupportsRPRES {ctx->HostFeatures.SupportsRPRES}
   , HostSupportsAFP {ctx->HostFeatures.SupportsAFP}
   , CTX {ctx}
-  , TempAllocator(ctx->CPUBackendAllocator, 0) {
+  , TempCodeBufferAllocator(ctx->CPUBackendAllocator, 0) {
 
   RAPass = Thread->PassManager->GetPass<IR::RegisterAllocationPass>("RA");
 
@@ -626,7 +630,7 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
   RAPass->AddRegisters(IR::RegClass::GPRFixed, StaticRegisters.size());
   RAPass->AddRegisters(IR::RegClass::FPR, GeneralFPRegisters.size());
   RAPass->AddRegisters(IR::RegClass::FPRFixed, StaticFPRegisters.size());
-  RAPass->PairRegs = PairRegisters;
+  RAPass->SetNumPairRegs(PairRegisters);
 
   {
     // Set up pointers that the JIT needs to load
@@ -636,6 +640,8 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
 
     Ptrs.PrintValue = reinterpret_cast<uint64_t>(PrintValue);
     Ptrs.PrintVectorValue = reinterpret_cast<uint64_t>(PrintVectorValue);
+    Ptrs.PrintMsgValue = reinterpret_cast<uint64_t>(PrintMsg);
+
     Ptrs.ThreadRemoveCodeEntryFromJIT = reinterpret_cast<uintptr_t>(&Context::ContextImpl::ThreadRemoveCodeEntryFromJit);
     Ptrs.MonoBackpatcherWrite = reinterpret_cast<uint64_t>(&Context::ContextImpl::MonoBackpatcherWrite);
     Ptrs.CPUIDObj = reinterpret_cast<uint64_t>(&CTX->CPUID);
@@ -660,14 +666,8 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
     Ptrs.LDIV = reinterpret_cast<uint64_t>(LDIV);
   }
 
-  CurrentCodeBuffer = CodeBuffers.GetLatest();
+  CurrentCodeBuffer = SharedCodeBuffers.GetLatest();
   ThreadState->LookupCache->Shared = CurrentCodeBuffer->LookupCache.get();
-}
-
-void Arm64JITCore::EmitDetectionString() {
-  const char JITString[] = "FEXJIT::Arm64JITCore::";
-  EmitString(JITString);
-  Align();
 }
 
 void Arm64JITCore::ClearCache() {
@@ -675,9 +675,8 @@ void Arm64JITCore::ClearCache() {
   auto PrevCodeBuffer = CurrentCodeBuffer;
   auto lk = PrevCodeBuffer->LookupCache->AcquireWriteLock();
 
-  auto CodeBuffer = GetEmptyCodeBuffer();
-  SetBuffer(CodeBuffer->Ptr, CodeBuffer->Size);
-  EmitDetectionString();
+  auto CodeBuffer = GetEmptySharedCodeBuffer();
+  SetBuffer(CodeBuffer->Ptr, CodeBuffer->AllocatedSize);
 
   ThreadState->LookupCache->ChangeGuestToHostMapping(*PrevCodeBuffer, *CurrentCodeBuffer->LookupCache, lk);
 }
@@ -770,8 +769,15 @@ void Arm64JITCore::EmitSuspendInterruptCheck() {
   if (CTX->Config.NeedsPendingInterruptFaultCheck) {
     // Trigger a fault if there are any pending interrupts
     // Used only for suspend on WIN32 at the moment
-    strb(ARMEmitter::XReg::zr, STATE,
-         offsetof(FEXCore::Core::InternalThreadState, InterruptFaultPage) - offsetof(FEXCore::Core::InternalThreadState, BaseFrameState));
+    constexpr size_t InterruptPageOffset =
+      offsetof(FEXCore::Core::InternalThreadState, InterruptFaultPage) - offsetof(FEXCore::Core::InternalThreadState, BaseFrameState);
+    if constexpr (InterruptPageOffset <= 32760) {
+      str(ARMEmitter::XReg::zr, STATE, InterruptPageOffset);
+    } else {
+      // Need to use vector 128-bit store for this range.
+      // Doesn't matter which register we use to store.
+      str(ARMEmitter::QReg::q0, STATE, InterruptPageOffset);
+    }
   }
 
 #ifdef ARCHITECTURE_arm64ec
@@ -830,7 +836,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   case RestartOptions::Control::EnableFarARM64Jumps: RequiresFarARM64Jumps = true; break;
   case RestartOptions::Control::NeedsLargerJITSpace:
     // Get rid of the claimed buffer immediately, we can't fit in it at all.
-    TempAllocator.UnclaimBuffer();
+    TempCodeBufferAllocator.UnclaimBuffer();
     SSANodeMultiplier *= 2;
     break;
   default: LOGMAN_MSG_A_FMT("Unhandled Arm64 restart condition!");
@@ -841,6 +847,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   CallReturnTargets.clear();
   PendingJumpThunks.clear();
   JumpTargets.resize(IR->GetHeader()->BlockCount, {});
+  Relocations.resize(PrevNumAllocations, FEXCore::CPU::Relocation::Default()); // Discard any relocations generated from a previous attempt
 
   CodeData.EntryPoints.clear();
 
@@ -850,7 +857,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 
   // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
   // This minimizes lock contention of CodeBufferWriteMutex.
-  auto TempCodeBufferInfo = TempAllocator.ReownOrClaimBufferWithSize(DesiredBufferRange);
+  auto TempCodeBufferInfo = TempCodeBufferAllocator.ReownOrClaimBufferWithSize(DesiredBufferRange);
   auto TempCodeBuffer = TempCodeBufferInfo.Ptr;
   const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXCore::Utils::FEX_PAGE_SIZE;
 
@@ -895,7 +902,6 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   PendingCallReturnTargetLabel = nullptr;
 
   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
-    using namespace FEXCore::IR;
     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
     LOGMAN_THROW_A_FMT(BlockIROp->Header.Op == IR::OP_CODEBLOCK, "IR type failed to be a code block");
@@ -1066,7 +1072,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   // Migrate the compile output from temporary storage to the actual CodeBuffer.
   // This can block progress in other compiling threads, so the duration of the lock should be as small as possible.
   {
-    auto CodeBufferLock = std::unique_lock {CodeBuffers.CodeBufferWriteMutex};
+    auto CodeBufferLock = std::unique_lock {SharedCodeBuffers.CodeBufferWriteMutex};
 
     // Query size of generated code
     const auto TempSize = GetCursorOffset();
@@ -1082,15 +1088,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
       }
 
       // NOTE: 16-byte alignment of the new cursor offset must be preserved for block linking records
-      SetBuffer(CurrentCodeBuffer->Ptr, CurrentCodeBuffer->Size);
-      SetCursorOffset(AlignUp(CodeBuffers.LatestOffset, 16));
-      if ((GetCursorOffset() + TempSize) > (CurrentCodeBuffer->Size - Utils::FEX_PAGE_SIZE)) {
+      SetBuffer(CurrentCodeBuffer->Ptr, CurrentCodeBuffer->AllocatedSize);
+      SetCursorOffset(SharedCodeBuffers.LatestOffset);
+      Align16B();
+      if ((GetCursorOffset() + TempSize) > CurrentCodeBuffer->UsableSize()) {
         CTX->ClearCodeCache(ThreadState);
       }
 
-      Align16B();
-
-      CodeBuffers.LatestOffset = GetCursorOffset();
+      SharedCodeBuffers.LatestOffset = GetCursorOffset();
     }
 
     // Adjust host addresses
@@ -1102,17 +1107,17 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     CodeBegin += Delta;
 
     for (std::size_t Idx = PrevNumAllocations; Idx != Relocations.size(); ++Idx) {
-      Relocations[Idx].Header.Offset += CodeBuffers.LatestOffset;
+      Relocations[Idx].Header.Offset += SharedCodeBuffers.LatestOffset;
     }
 
     // Copy over CodeBuffer contents
     memcpy(GetCursorAddress<uint8_t*>(), TempCodeBuffer, TempSize);
-    SetCursorOffset(CodeBuffers.LatestOffset + TempSize);
+    SetCursorOffset(SharedCodeBuffers.LatestOffset + TempSize);
 
-    CodeBuffers.LatestOffset = GetCursorOffset();
+    SharedCodeBuffers.LatestOffset = GetCursorOffset();
   }
 
-  TempAllocator.DelayedDisownBuffer();
+  TempCodeBufferAllocator.DelayedDisownBuffer();
 
   ClearICache(CodeBegin, CodeOnlySize);
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Utils/Allocator/HostAllocator.h"
+#include "Utils/Allocator.h"
 #include <FEXCore/Utils/Allocator.h>
 #include <FEXCore/Utils/CompilerDefs.h>
 #include <FEXCore/Utils/LogManager.h>
@@ -32,20 +33,18 @@ std::pmr::memory_resource* get_default_resource() {
 }
 } // namespace fextl::pmr
 
-#ifndef _WIN32
 namespace FEXCore::Allocator {
+#ifndef _WIN32
 MMAP_Hook mmap {::mmap};
 MUNMAP_Hook munmap {::munmap};
-
-uint64_t HostVASize {};
 
 using GLIBC_MALLOC_Hook = void* (*)(size_t, const void* caller);
 using GLIBC_REALLOC_Hook = void* (*)(void*, size_t, const void* caller);
 using GLIBC_FREE_Hook = void (*)(void*, const void* caller);
 
-fextl::unique_ptr<Alloc::HostAllocator> Alloc64 {};
+static fextl::unique_ptr<Alloc::HostAllocator> Alloc64 {};
 
-void* FEX_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+static void* FEX_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
   void* Result = Alloc64->Mmap(addr, length, prot, flags, fd, offset);
   if (Result >= (void*)-4096) {
     errno = -(uint64_t)Result;
@@ -69,7 +68,7 @@ void VirtualName(const char* Name, void* Ptr, size_t Size) {
   }
 }
 
-int FEX_munmap(void* addr, size_t length) {
+static int FEX_munmap(void* addr, size_t length) {
   int Result = Alloc64->Munmap(addr, length);
 
   if (Result != 0) {
@@ -81,21 +80,21 @@ int FEX_munmap(void* addr, size_t length) {
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-static void AssignHookOverrides() {
-  SetJemallocMmapHook(FEX_mmap);
-  SetJemallocMunmapHook(FEX_munmap);
+
+static void AssignHookOverrides(size_t PageSize) {
+  SetupAllocatorHooks(FEX_mmap, FEX_munmap);
   FEXCore::Allocator::mmap = FEX_mmap;
   FEXCore::Allocator::munmap = FEX_munmap;
+  InitializeAllocator(PageSize);
 }
 
-void SetupHooks() {
+void SetupHooks(size_t PageSize) {
   Alloc64 = Alloc::OSAllocator::Create64BitAllocator();
-  AssignHookOverrides();
+  AssignHookOverrides(PageSize);
 }
 
 void ClearHooks() {
-  SetJemallocMmapHook(::mmap);
-  SetJemallocMunmapHook(::munmap);
+  SetupAllocatorHooks(::mmap, ::munmap);
   FEXCore::Allocator::mmap = ::mmap;
   FEXCore::Allocator::munmap = ::munmap;
 
@@ -103,9 +102,11 @@ void ClearHooks() {
 }
 #pragma GCC diagnostic pop
 
-FEX_DEFAULT_VISIBILITY size_t DetermineVASize() {
-  if (HostVASize) {
-    return HostVASize;
+FEX_DEFAULT_VISIBILITY size_t GetHostVABits() {
+  static uint64_t HostVABits = 0;
+
+  if (HostVABits) {
+    return HostVABits;
   }
 
   static constexpr std::array<uintptr_t, 7> TLBSizes = {
@@ -113,27 +114,18 @@ FEX_DEFAULT_VISIBILITY size_t DetermineVASize() {
   };
 
   for (auto Bits : TLBSizes) {
-    uintptr_t Size = 1ULL << Bits;
-    // Just try allocating
-    // We can't actually determine VA size on ARM safely
-    auto Find = [](uintptr_t Size) -> bool {
-      for (int i = 0; i < 64; ++i) {
-        // Try grabbing a some of the top pages of the range
-        // x86 allocates some high pages in the top end
-        void* Ptr = ::mmap(reinterpret_cast<void*>(Size - FEXCore::Utils::FEX_PAGE_SIZE * i), FEXCore::Utils::FEX_PAGE_SIZE, PROT_NONE,
-                           MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (Ptr != (void*)~0ULL) {
-          ::munmap(Ptr, FEXCore::Utils::FEX_PAGE_SIZE);
-          if (Ptr == (void*)(Size - FEXCore::Utils::FEX_PAGE_SIZE * i)) {
-            return true;
-          }
-        }
-      }
-      return false;
-    };
 
-    if (Find(Size)) {
-      HostVASize = Bits;
+    // We can't actually determine VA size on ARM safely.
+    // Instead, try allocating the page at the top of the range.
+    // If this succeeds OR the page is reported as already existing,
+    // we know we're in valid VA space. Otherwise, we must go lower.
+    void* Addr = reinterpret_cast<void*>((1ULL << Bits) - FEXCore::Utils::FEX_PAGE_SIZE);
+    void* Ptr = ::mmap(Addr, FEXCore::Utils::FEX_PAGE_SIZE, PROT_NONE, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (Ptr != (void*)~0ULL) {
+      ::munmap(Ptr, FEXCore::Utils::FEX_PAGE_SIZE);
+    }
+    if (Ptr != (void*)~0ULL || errno == EEXIST) {
+      HostVABits = Bits;
       return Bits;
     }
   }
@@ -261,8 +253,18 @@ fextl::vector<MemoryRegion> StealMemoryRegion(uintptr_t Begin, uintptr_t End) {
   }
 
   // Block remaining memory gaps
+  bool SupportsDontDump = true;
   for (auto RegionIt = Regions.begin(); RegionIt != Regions.end(); ++RegionIt) {
     auto Alloc = ::mmap(RegionIt->Ptr, RegionIt->Size, PROT_NONE, MAP_ANONYMOUS | MAP_NORESERVE | MAP_PRIVATE | MAP_FIXED_NOREPLACE, -1, 0);
+
+    if (SupportsDontDump) {
+      // Mark these regions as don't dump so that coredump doesn't try dumping large unmapped regions.
+      // Ideally coredump would be smart enough to only dump resident pages, but here we are.
+      auto Result = madvise(RegionIt->Ptr, RegionIt->Size, MADV_DONTDUMP);
+      if (Result == -1) {
+        SupportsDontDump = false;
+      }
+    }
 
     LogMan::Throw::AFmt(Alloc != MAP_FAILED, "StealMemoryRegion: mmap({}, {:x}) failed: {}", fmt::ptr(RegionIt->Ptr), RegionIt->Size, errno);
     LogMan::Throw::AFmt(Alloc == RegionIt->Ptr, "mmap returned {} instead of {}", Alloc, fmt::ptr(RegionIt->Ptr));
@@ -271,8 +273,8 @@ fextl::vector<MemoryRegion> StealMemoryRegion(uintptr_t Begin, uintptr_t End) {
   return Regions;
 }
 
-fextl::vector<MemoryRegion> Setup48BitAllocatorIfExists() {
-  size_t Bits = FEXCore::Allocator::DetermineVASize();
+fextl::vector<MemoryRegion> Setup48BitAllocatorIfExists(size_t PageSize) {
+  size_t Bits = FEXCore::Allocator::GetHostVABits();
   if (Bits < 48) {
     return {};
   }
@@ -282,7 +284,7 @@ fextl::vector<MemoryRegion> Setup48BitAllocatorIfExists() {
   auto Regions = StealMemoryRegion(Begin48BitVA, End48BitVA);
 
   Alloc64 = Alloc::OSAllocator::Create64BitAllocatorWithRegions(Regions);
-  AssignHookOverrides();
+  AssignHookOverrides(PageSize);
 
   return Regions;
 }
@@ -304,5 +306,18 @@ void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {
     Alloc64->UnlockAfterFork(Thread, Child);
   }
 }
-} // namespace FEXCore::Allocator
+#else
+
+void VirtualNameNOP(const char*, const void*, size_t) {}
+void VirtualTHPNOP(const void* Ptr, size_t Size, THPControl Control) {}
+
+VirtualNamePtr VirtualName {VirtualNameNOP};
+VirtualTHPPtr VirtualTHPControl {VirtualTHPNOP};
+
+void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
+  VirtualName = Ptrs.VirtualName;
+  VirtualTHPControl = Ptrs.VirtualTHPControl;
+}
+
 #endif
+} // namespace FEXCore::Allocator

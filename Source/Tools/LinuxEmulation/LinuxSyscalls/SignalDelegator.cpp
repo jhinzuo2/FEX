@@ -64,16 +64,10 @@ static void SignalHandlerThunk(int Signal, siginfo_t* Info, void* UContext) {
   ThreadObject->SignalInfo.Delegator->HandleSignal(ThreadObject, Signal, Info, UContext);
 }
 
-uint64_t SigIsMember(GuestSAMask* Set, int Signal) {
+static uint64_t SigIsMember(GuestSAMask* Set, int Signal) {
   // Signal 0 isn't real, so everything is offset by one inside the set
   Signal -= 1;
   return (Set->Val >> Signal) & 1;
-}
-
-uint64_t SetSignal(GuestSAMask* Set, int Signal) {
-  // Signal 0 isn't real, so everything is offset by one inside the set
-  Signal -= 1;
-  return Set->Val | (1ULL << Signal);
 }
 
 /**
@@ -649,17 +643,19 @@ void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObjec
                        "capacity size. This will "
                        "likely crash! Asserting now!");
 
+    // Peek into sigset_t implementation details, extracting the __val member for glibc and __bits for musl
+    auto& [sigmask_val] = _context->uc_sigmask;
+    static_assert(sizeof(sigmask_val[0]) == sizeof(uint64_t), "Unknown sigset_t layout");
+
     ThreadObject->SignalInfo.DeferredSignalFrames.emplace_back(ThreadStateObject::DeferredSignalState {
       .Info = SigInfo,
       .Signal = Signal,
-      .SigMask = _context->uc_sigmask.__val[0],
+      .SigMask = sigmask_val[0],
     });
-
-    uint64_t NewMask = GetNewSigMask(Signal);
 
     // Update our host signal mask so we don't hit race conditions with signals
     // This allows us to maintain the expected signal mask through the guest signal handling and then all the way back again
-    memcpy(&_context->uc_sigmask, &NewMask, sizeof(uint64_t));
+    sigmask_val[0] = GetNewSigMask(Signal);
 
     // Now update the faulting page permissions so it will fault on write.
     mprotect(reinterpret_cast<void*>(&Thread->InterruptFaultPage), sizeof(Thread->InterruptFaultPage), PROT_NONE);
@@ -894,7 +890,7 @@ SignalDelegator::SignalDelegator(FEXCore::Context::Context* _CTX, const std::str
 
   // Most signals default to termination
   // These ones are slightly different
-  static constexpr std::array<std::pair<int, SignalDelegator::DefaultBehaviour>, 14> SignalDefaultBehaviours = {{
+  static constexpr std::array<std::pair<int, SignalDelegator::DefaultBehaviourType>, 14> SignalDefaultBehaviours = {{
     {SIGQUIT, DEFAULT_COREDUMP},
     {SIGILL, DEFAULT_COREDUMP},
     {SIGTRAP, DEFAULT_COREDUMP},
@@ -1217,7 +1213,7 @@ uint64_t SignalDelegator::GuestSigProcMask(FEX::HLE::ThreadStateObject* Thread, 
   // 3) Give old mask back
   auto OldSet = Thread->SignalInfo.CurrentSignalMask.Val;
 
-  if (!!set) {
+  if (set) {
     uint64_t IgnoredSignalsMask = ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     if (how == SIG_BLOCK) {
       Thread->SignalInfo.CurrentSignalMask.Val |= *set & IgnoredSignalsMask;
@@ -1242,7 +1238,7 @@ uint64_t SignalDelegator::GuestSigProcMask(FEX::HLE::ThreadStateObject* Thread, 
     ::syscall(SYS_rt_sigprocmask, SIG_SETMASK, &HostMask, nullptr, 8);
   }
 
-  if (!!oldset) {
+  if (oldset) {
     *oldset = OldSet;
   }
 
@@ -1315,11 +1311,7 @@ uint64_t SignalDelegator::GuestSigSuspend(FEX::HLE::ThreadStateObject* Thread, u
 }
 
 uint64_t SignalDelegator::GuestSigTimedWait(uint64_t* set, siginfo_t* info, const struct timespec* timeout, size_t sigsetsize) {
-  if (sigsetsize > sizeof(uint64_t)) {
-    return -EINVAL;
-  }
-
-  uint64_t Result = ::syscall(SYS_rt_sigtimedwait, set, info, timeout);
+  uint64_t Result = ::syscall(SYS_rt_sigtimedwait, set, info, timeout, sigsetsize);
 
   return Result == -1 ? -errno : Result;
 }

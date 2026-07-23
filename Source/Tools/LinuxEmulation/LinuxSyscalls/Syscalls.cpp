@@ -60,6 +60,7 @@ $end_info$
 #include <syscall.h>
 #include <sys/mman.h>
 #include <sys/utsname.h>
+#include <thread>
 #include <unistd.h>
 
 namespace FEX::HLE {
@@ -789,7 +790,7 @@ SyscallHandler::SyscallHandler(FEXCore::Context::Context* _CTX, FEX::HLE::Signal
   , SignalDelegation {_SignalDelegation}
   , ThunkHandler {ThunkHandler} {
   FEX::HLE::_SyscallHandler = this;
-  HostKernelVersion = CalculateHostKernelVersion();
+  HostKernelVersion = LinuxVersion::CalculateHostKernelVersion();
   GuestKernelVersion = CalculateGuestKernelVersion();
   Alloc32Handler = FEX::HLE::Create32BitAllocator();
 
@@ -802,28 +803,9 @@ SyscallHandler::~SyscallHandler() {
   FEXCore::Allocator::munmap(reinterpret_cast<void*>(DataSpace), DataSpaceMappedSize);
 }
 
-uint32_t SyscallHandler::CalculateHostKernelVersion() {
-  struct utsname buf {};
-  if (uname(&buf) == -1) {
-    return 0;
-  }
-
-  uint32_t Major {};
-  uint32_t Minor {};
-  uint32_t Patch {};
-
-  // Parse kernel version in the form of `<Major>.<Minor>.<Patch>[Optional Data]`
-  const auto End = buf.release + sizeof(buf.release);
-  auto Results = std::from_chars(buf.release, End, Major, 10);
-  Results = std::from_chars(Results.ptr + 1, End, Minor, 10);
-  Results = std::from_chars(Results.ptr + 1, End, Patch, 10);
-
-  return (Major << 24) | (Minor << 16) | Patch;
-}
-
 uint32_t SyscallHandler::CalculateGuestKernelVersion() {
   // We currently only emulate a kernel between the ranges of Kernel 5.15.0 and 6.11.0
-  return std::max(KernelVersion(5, 15), std::min(KernelVersion(6, 11), GetHostKernelVersion()));
+  return std::max(LinuxVersion::KernelVersion(5, 15), std::min(LinuxVersion::KernelVersion(6, 11), GetHostKernelVersion()));
 }
 
 uint64_t SyscallHandler::HandleSyscall(FEXCore::Core::CpuStateFrame* Frame, FEXCore::HLE::SyscallArguments* Args) {
@@ -899,9 +881,19 @@ uint64_t UnimplementedSyscallSafe(FEXCore::Core::CpuStateFrame* Frame, uint64_t 
 }
 
 void SyscallHandler::LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) {
-  TM.LockBeforeFork();
-  Thread->CTX->LockBeforeFork(Thread);
-  VMATracking.Mutex.lock();
+  while (true) {
+    TM.LockBeforeFork();
+    Thread->CTX->LockBeforeFork(Thread);
+    if (std::try_lock(CodeCachePatchingMutex, VMATracking.Mutex) == -1) {
+      break;
+    }
+
+    // Lock failed: Another thread has temporarily acquired these mutexes.
+    // Release them to a void a deadlock and retry later
+    CTX->UnlockAfterFork(Thread, false);
+    TM.UnlockAfterFork(Thread, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds {10});
+  };
 }
 
 void SyscallHandler::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThread, bool Child) {
@@ -910,8 +902,10 @@ void SyscallHandler::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThr
     FM.SetProtectedCodeMapFD(-1);
 
     VMATracking.Mutex.StealAndDropActiveLocks();
+    CodeCachePatchingMutex.StealAndDropActiveLocks();
   } else {
     VMATracking.Mutex.unlock();
+    CodeCachePatchingMutex.unlock();
   }
 
   CTX->UnlockAfterFork(LiveThread, Child);
