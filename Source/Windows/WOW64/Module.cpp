@@ -1359,10 +1359,11 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   auto* Exception = Ptrs->ExceptionRecord;
   auto TLS = GetTLS();
   auto Thread = TLS.ThreadState();
+  uint64_t FaultAddress = 0;
   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedSignalTime);
 
   if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
-    const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
+    FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
 
     if (FEX::Windows::CallRetStack::HandleAccessViolation(Thread, FaultAddress, Context->X25)) {
       return true;
