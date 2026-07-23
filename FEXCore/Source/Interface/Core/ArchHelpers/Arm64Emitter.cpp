@@ -360,6 +360,7 @@ namespace x32 {
 Arm64Emitter::Arm64Emitter(FEXCore::Context::ContextImpl* ctx, void* EmissionPtr, size_t size)
   : Emitter(static_cast<uint8_t*>(EmissionPtr), size)
   , EmitterCTX {ctx}
+  , SupportCodeRelocations {ctx->RequiresRelocatableConstants()}
 #ifdef VIXL_SIMULATOR
   , Simulator {&SimDecoder, stdout, vixl::aarch64::SimStack(SimulatorStackSize).Allocate()}
 #endif
@@ -425,7 +426,7 @@ void Arm64Emitter::LoadConstant(ARMEmitter::Size s, ARMEmitter::Register Reg, ui
     NOPPad = false;
   } else if (Pad == PadType::AUTOPAD) {
     // Force NOP padding to ensure relocated constants always have enough encoding space available
-    NOPPad = EnableCodeCaching;
+    NOPPad = SupportCodeRelocations;
   }
 
   bool Is64Bit = s == ARMEmitter::Size::i64Bit;
@@ -586,8 +587,8 @@ void Arm64Emitter::PushCalleeSavedRegisters() {
     {ARMEmitter::XReg::x29, ARMEmitter::XReg::x30},
   }};
 
-  for (auto& RegPair : CalleeSaved) {
-    stp<ARMEmitter::IndexType::PRE>(RegPair.first, RegPair.second, ARMEmitter::Reg::rsp, -16);
+  for (const auto& [rt, rt2] : CalleeSaved) {
+    stp<ARMEmitter::IndexType::PRE>(rt, rt2, ARMEmitter::Reg::rsp, -16);
   }
 
   // Additionally we need to store the lower 64bits of v8-v15
@@ -604,9 +605,8 @@ void Arm64Emitter::PushCalleeSavedRegisters() {
   // We just saved x19 so it is safe
   add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::r19, ARMEmitter::Reg::rsp, 0);
 
-  for (auto& RegQuad : FPRs) {
-    st4(ARMEmitter::SubRegSize::i64Bit, std::get<0>(RegQuad), std::get<1>(RegQuad), std::get<2>(RegQuad), std::get<3>(RegQuad), 0,
-        ARMEmitter::Reg::r19, 32);
+  for (const auto& [rt, rt2, rt3, rt4] : FPRs) {
+    st4(ARMEmitter::SubRegSize::i64Bit, rt, rt2, rt3, rt4, 0, ARMEmitter::Reg::r19, 32);
   }
 }
 
@@ -616,9 +616,8 @@ void Arm64Emitter::PopCalleeSavedRegisters() {
     {ARMEmitter::DReg::d12, ARMEmitter::DReg::d13, ARMEmitter::DReg::d14, ARMEmitter::DReg::d15},
   }};
 
-  for (auto& RegQuad : FPRs) {
-    ld4(ARMEmitter::SubRegSize::i64Bit, std::get<0>(RegQuad), std::get<1>(RegQuad), std::get<2>(RegQuad), std::get<3>(RegQuad), 0,
-        ARMEmitter::Reg::rsp, 32);
+  for (const auto& [rt, rt2, rt3, rt4] : FPRs) {
+    ld4(ARMEmitter::SubRegSize::i64Bit, rt, rt2, rt3, rt4, 0, ARMEmitter::Reg::rsp, 32);
   }
 
   constexpr static std::array<std::pair<ARMEmitter::XRegister, ARMEmitter::XRegister>, 6> CalleeSaved = {{
@@ -630,12 +629,12 @@ void Arm64Emitter::PopCalleeSavedRegisters() {
     {ARMEmitter::XReg::x19, ARMEmitter::XReg::x20},
   }};
 
-  for (auto& RegPair : CalleeSaved) {
-    ldp<ARMEmitter::IndexType::POST>(RegPair.first, RegPair.second, ARMEmitter::Reg::rsp, 16);
+  for (const auto& [rt, rt2] : CalleeSaved) {
+    ldp<ARMEmitter::IndexType::POST>(rt, rt2, ARMEmitter::Reg::rsp, 16);
   }
 }
 
-void Arm64Emitter::FillSpecialRegs(ARMEmitter::Register TmpReg, ARMEmitter::Register TmpReg2, bool SetFIZ, bool SetPredRegs) {
+void Arm64Emitter::FillSpecialRegs(ARMEmitter::Register TmpReg, ARMEmitter::Register TmpReg2, const FillSpecialRegsOptions& Options) {
 #ifndef VIXL_SIMULATOR
   if (EmitterCTX->HostFeatures.SupportsAFP) {
     // Enable AFP features when filling JIT state.
@@ -651,7 +650,7 @@ void Arm64Emitter::FillSpecialRegs(ARMEmitter::Register TmpReg, ARMEmitter::Regi
         (1U << 2) |   // NEP
           (1U << 1)); // AH
 
-    if (SetFIZ) {
+    if (Options.SetFIZ) {
       // Insert MXCSR.DAZ in to FIZ
       ldr(TmpReg2.W(), STATE.R(), offsetof(FEXCore::Core::CPUState, mxcsr));
       bfxil(ARMEmitter::Size::i64Bit, TmpReg, TmpReg2, 6, 1);
@@ -661,7 +660,7 @@ void Arm64Emitter::FillSpecialRegs(ARMEmitter::Register TmpReg, ARMEmitter::Regi
   }
 #endif
 
-  if (SetPredRegs && (EmitterCTX->HostFeatures.SupportsSVE256 || EmitterCTX->HostFeatures.SupportsSVE128)) {
+  if (Options.SetPredRegs && EmitterCTX->HostFeatures.SupportsSVE()) {
     // Set up predicate registers.
     // We don't bother spilling these in SpillStaticRegs,
     // since all that matters is we restore them on a fill.
@@ -824,7 +823,7 @@ void Arm64Emitter::FillStaticRegs(FillStaticRegOptions Options) {
     msr(ARMEmitter::SystemRegister::NZCV, TmpReg);
   }
 
-  FillSpecialRegs(TmpReg, TmpReg2, true, Options.FPRs);
+  FillSpecialRegs(TmpReg, TmpReg2, {.SetFIZ = true, .SetPredRegs = Options.FPRs});
 
   if (Options.FPRs) {
     if (EmitterCTX->HostFeatures.SupportsAVX && EmitterCTX->HostFeatures.SupportsSVE256) {
@@ -1061,6 +1060,7 @@ size_t Arm64Emitter::SpillForPreserveAllABICall(ARMEmitter::Register TmpReg, boo
   SpillStaticRegs(TmpReg, {
                             .GPRSpillMask = PreserveSRAMask,
                             .FPRSpillMask = PreserveSRAFPRMask,
+                            .FPRs = FPRs,
                           });
 
   sub(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::rsp, SPOffset);

@@ -32,6 +32,7 @@ public:
     NOEXEC_INST,
     PARTIAL_DECODE_INST,
     BAD_RELOCATION,
+    UNIMPLEMENTED_INST,
   };
 
   // New Frontend decoding
@@ -55,6 +56,7 @@ public:
 
   Decoder(FEXCore::Core::InternalThreadState* Thread);
   bool CheckIfCacheable(FEXCore::Core::InternalThreadState&, const uint8_t* InstStream, uint64_t PC, uint64_t MaxInst);
+
   void DecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState* Thread, const uint8_t* InstStream, uint64_t PC, uint64_t MaxInst);
 
   const DecodedBlockInformation* GetDecodedBlockInfo() const {
@@ -91,7 +93,7 @@ private:
 
   FEX_CONFIG_OPT(EnableCodeCacheValidation, ENABLECODECACHEVALIDATION);
 
-  bool DecodeInstructionImpl(uint64_t PC);
+  DecodedBlockStatus DecodeInstructionImpl(uint64_t PC);
   DecodedBlockStatus DecodeInstruction(uint64_t PC);
   void DecodeInstructionsAtEntryPass(FEXCore::Core::InternalThreadState* Thread, const uint8_t* InstStream, uint64_t PC, uint64_t MaxInst,
                                      bool EnableMultiblock);
@@ -112,8 +114,8 @@ private:
     InstructionSize += Size;
   }
 
-  bool NormalOp(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op, DecodedHeader Options = {});
-  bool NormalOpHeader(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op);
+  DecodedBlockStatus NormalOp(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op, DecodedHeader Options = {});
+  DecodedBlockStatus NormalOpHeader(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op);
 
   void DecodeREXIfValid(int8_t ExpectedOffset = -1);
 
@@ -129,7 +131,27 @@ private:
   uint64_t NonExecutableAddress {};
   bool HitBadRelocation {};
 
-  const uint8_t* InstStream {};
+  struct DecodeStream {
+    // Original instruction stream RIP location.
+    const uint8_t* InstStream;
+
+    // Adjusted location for FEX actually decodes from.
+    const uint8_t* AdjustedInstStream;
+
+    DecodeStream& operator-=(size_t offset) noexcept {
+      InstStream -= offset;
+      AdjustedInstStream -= offset;
+      return *this;
+    }
+
+    DecodeStream& operator+=(size_t offset) noexcept {
+      InstStream += offset;
+      AdjustedInstStream += offset;
+      return *this;
+    }
+  };
+
+  DecodeStream InstStream;
   IR::OpSize GetGPROpSize() const {
     return BlockInfo.Is64BitMode ? IR::OpSize::i64Bit : IR::OpSize::i32Bit;
   }
@@ -173,6 +195,6 @@ private:
   const std::array<X86Tables::X86InstInfo, X86Tables::MAX_VEX_TABLE_SIZE>* VEXTable {};
   const std::array<X86Tables::X86InstInfo, X86Tables::MAX_VEX_GROUP_TABLE_SIZE>* VEXTableGroup {};
 
-  const uint8_t* AdjustAddrForSpecialRegion(const uint8_t* _InstStream, uint64_t EntryPoint, uint64_t RIP);
+  const DecodeStream AdjustAddrForSpecialRegion(const uint8_t* _InstStream, uint64_t EntryPoint, uint64_t RIP);
 };
 } // namespace FEXCore::Frontend

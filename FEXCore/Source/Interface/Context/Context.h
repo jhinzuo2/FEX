@@ -4,6 +4,7 @@
 #include "Common/JitSymbols.h"
 #include "Interface/Core/CPUBackend.h"
 #include "Interface/Core/CPUID.h"
+#include "Interface/Core/SharedCodeBufferManager.h"
 #include <Interface/IR/IntrusiveIRList.h>
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Core/Context.h>
@@ -130,7 +131,7 @@ public:
                             uint32_t RelocationOffset, bool ForStorage);
 };
 
-class ContextImpl final : public FEXCore::Context::Context, public CPU::CodeBufferManager {
+class ContextImpl final : public FEXCore::Context::Context, public CPU::SharedCodeBufferManager {
 public:
   // Context base class implementation.
   bool InitCore() override;
@@ -251,6 +252,7 @@ public:
   struct TrackingEmpty {
     // RIP stepping handling
     virtual void AddSingleStepTarget(uint64_t GuestRIP) {}
+    virtual void AddSingleStepTargetRange(uint64_t RIPBegin, uint64_t RipEnd) {}
     virtual void AllTargetSingleStep() {}
     virtual void RemoveSingleStepTarget(uint64_t GuestRIP) {}
     virtual bool IsSingleStepTarget(uint64_t GuestRIP) {
@@ -273,6 +275,10 @@ public:
       SingleStepTargets.emplace(GuestRIP);
     }
 
+    virtual void AddSingleStepTargetRange(uint64_t RIPBegin, uint64_t RIPEnd) override {
+      SingleStepRanges.emplace_back(Range {RIPBegin, RIPEnd});
+    }
+
     void RemoveSingleStepTarget(uint64_t GuestRIP) override {
       SingleStepTargets.erase(GuestRIP);
     }
@@ -282,7 +288,7 @@ public:
     }
 
     bool IsSingleStepTarget(uint64_t GuestRIP) override {
-      return SingleStepEverything || SingleStepTargets.contains(GuestRIP);
+      return SingleStepEverything || SingleStepTargets.contains(GuestRIP) || IsInRange(GuestRIP);
     }
 
     void AddWriteWatchPoint(uint64_t Ptr) override {
@@ -306,6 +312,14 @@ public:
     fextl::set<uint64_t> SingleStepTargets {};
     fextl::set<uint64_t> WatchWriteTargets {};
     fextl::set<uint64_t> WatchReadTargets {};
+    struct Range {
+      uint64_t Begin, End;
+    };
+    fextl::vector<Range> SingleStepRanges {};
+
+    bool IsInRange(uint64_t RIP) const {
+      return std::ranges::any_of(SingleStepRanges, [RIP](const auto& range) { return RIP >= range.Begin && RIP <= range.End; });
+    }
 
     static bool ContainsRange(const fextl::set<uint64_t>& Set, uint64_t Ptr, size_t Size) {
       for (auto it = Set.lower_bound(Ptr); it != Set.end(); --it) {
@@ -441,6 +455,8 @@ public:
   bool AreMonoHacksActive() const {
     return Config.MonoHacks && MonoDetected;
   }
+
+  bool RequiresRelocatableConstants() const;
 
 protected:
   void UpdateAtomicTSOEmulationConfig() {

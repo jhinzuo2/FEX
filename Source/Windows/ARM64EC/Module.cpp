@@ -29,6 +29,7 @@ $end_info$
 
 #include "Windows/Common/Allocator.h"
 #include "Windows/Common/EnvironmentVariablesHandling.h"
+#include "Windows/Common/FEXUnixLib.h"
 #include "Common/CallRetStack.h"
 #include "Common/JITGuardPage.h"
 #include "Common/Config.h"
@@ -267,7 +268,7 @@ void ParseWineSyscallNumbers(HMODULE NtDll) {
 void InitSyscalls() {
   // The ntdll exports called by GetModuleHandle/GetProcAddress aren't known to be patched before JIT init by any current
   // software so are safe to call, but if that changes the loader structures in the PEB could be parsed manually.
-  const auto NtDll = GetModuleHandle("ntdll.dll");
+  const auto NtDll = GetModuleHandleW(L"ntdll.dll");
   NtDllBase = reinterpret_cast<uintptr_t>(NtDll);
 
   const auto WineSyscallDispatcherPtr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_syscall_dispatcher"));
@@ -496,8 +497,7 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
   EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
   CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
 
-  Args->Rec = FEX::Windows::
-    HandleGuestException(Fault, Thread->CurrentFrame->SynchronousFaultAddress, Rec, Args->Context.Pc, Args->Context.X8);
+  Args->Rec = FEX::Windows::HandleGuestException(Fault, Rec, Args->Context.Pc, Args->Context.X8, Args->Context.X0);
   if (Args->Rec.ExceptionCode == EXCEPTION_SINGLE_STEP) {
     Args->Context.Cpsr &= ~(1 << 21); // PSTATE.SS
   } else if (Args->Rec.ExceptionCode == EXCEPTION_BREAKPOINT) {
@@ -593,16 +593,17 @@ NTSTATUS ProcessInit() {
   SignalDelegator = fextl::make_unique<FEX::DummyHandlers::DummySignalDelegator>();
   SyscallHandler = fextl::make_unique<Exception::ECSyscallHandler>();
 
-  const auto NtDll = GetModuleHandle("ntdll.dll");
+  const auto NtDll = GetModuleHandleW(L"ntdll.dll");
   const bool IsWine = !!GetProcAddress(NtDll, "wine_get_version");
   OvercommitTracker.emplace(IsWine);
 
   FEX::Windows::SetupEnvironmentVariableValues(NtDll);
 
   FEX::Windows::Allocator::SetupHooks(NtDll);
+  FEX::Windows::UnixLib::Init(NtDll);
 
   {
-    auto HostFeatures = FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine);
+    auto HostFeatures = FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine, FEXCore::HostFeatures::HostTypeEnum::Arm64ec);
     CTX = FEXCore::Context::Context::CreateNewContext(HostFeatures);
   }
 
@@ -620,22 +621,13 @@ NTSTATUS ProcessInit() {
 
   CPUFeatures.emplace(*CTX);
 
-  X64ReturnInstr = ::VirtualAlloc(nullptr, FEXCore::Utils::FEX_PAGE_SIZE, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+  X64ReturnInstr = ::VirtualAlloc(nullptr, FEXCore::Utils::FEX_PAGE_SIZE, MEM_COMMIT | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
   InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(X64ReturnInstr), FEXCore::Utils::FEX_PAGE_SIZE,
                                                           PAGE_EXECUTE_READ);
   *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
 
   const uintptr_t KiUserExceptionDispatcherFFS = reinterpret_cast<uintptr_t>(GetProcAddress(NtDll, "KiUserExceptionDispatcher"));
   Exception::KiUserExceptionDispatcher = NtDllRedirectionLUT[KiUserExceptionDispatcherFFS - NtDllBase] + NtDllBase;
-
-  FEX_CONFIG_OPT(TSOEnabled, TSOENABLED);
-  if (TSOEnabled()) {
-    BOOL Enable = TRUE;
-    NTSTATUS Status = NtSetInformationProcess(NtCurrentProcess(), ProcessFexHardwareTso, &Enable, sizeof(Enable));
-    if (Status == STATUS_SUCCESS) {
-      CTX->SetHardwareTSOSupport(true);
-    }
-  }
 
   FEX_CONFIG_OPT(ProfileStats, PROFILESTATS);
   FEX_CONFIG_OPT(StartupSleep, STARTUPSLEEP);
@@ -920,7 +912,8 @@ NTSTATUS ThreadInit() {
   const auto CPUArea = GetCPUArea();
 
   static constexpr size_t EmulatorStackSize = 0x40000;
-  const uint64_t EmulatorStack = reinterpret_cast<uint64_t>(::VirtualAlloc(nullptr, EmulatorStackSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  const uint64_t EmulatorStack =
+    reinterpret_cast<uint64_t>(::VirtualAlloc(nullptr, EmulatorStackSize, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE));
   CPUArea.EmulatorStackLimit() = EmulatorStack;
   CPUArea.EmulatorStackBase() = EmulatorStack + EmulatorStackSize;
 

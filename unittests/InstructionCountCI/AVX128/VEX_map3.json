@@ -337,7 +337,7 @@
         "Map 3 0b01 0x02 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "ldr q2, [x28, #3248]",
+        "ldr q2, [x28, #3312]",
         "tbx v16.16b, {v17.16b}, v2.16b",
         "stp xzr, xzr, [x28, #192]"
       ]
@@ -348,7 +348,7 @@
         "Map 3 0b01 0x02 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "ldr q2, [x28, #3264]",
+        "ldr q2, [x28, #3328]",
         "tbx v16.16b, {v17.16b}, v2.16b",
         "stp xzr, xzr, [x28, #192]"
       ]
@@ -369,7 +369,7 @@
         "Map 3 0b01 0x02 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "ldr q2, [x28, #3280]",
+        "ldr q2, [x28, #3344]",
         "tbx v16.16b, {v17.16b}, v2.16b",
         "stp xzr, xzr, [x28, #192]"
       ]
@@ -391,7 +391,7 @@
         "Map 3 0b01 0x02 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "ldr q2, [x28, #3296]",
+        "ldr q2, [x28, #3360]",
         "tbx v16.16b, {v17.16b}, v2.16b",
         "stp xzr, xzr, [x28, #192]"
       ]
@@ -412,7 +412,7 @@
         "Map 3 0b01 0x02 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "ldr q2, [x28, #3312]",
+        "ldr q2, [x28, #3376]",
         "tbx v16.16b, {v17.16b}, v2.16b",
         "stp xzr, xzr, [x28, #192]"
       ]
@@ -423,7 +423,7 @@
         "Map 3 0b01 0x02 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "ldr q2, [x28, #3328]",
+        "ldr q2, [x28, #3392]",
         "tbx v16.16b, {v17.16b}, v2.16b",
         "stp xzr, xzr, [x28, #192]"
       ]
@@ -2079,7 +2079,7 @@
       ]
     },
     "vcvtps2ph xmm0, xmm1, 00000000b": {
-      "ExpectedInstructionCount": 5,
+      "ExpectedInstructionCount": 6,
       "Comment": [
         "nearest rounding",
         "Map 3 0b01 0x1D 128-bit"
@@ -2089,41 +2089,44 @@
         "and x0, x20, #0xffffffffff3fffff",
         "msr fpcr, x0",
         "fcvtn v16.4h, v17.4s",
-        "msr fpcr, x20"
+        "msr fpcr, x20",
+        "stp xzr, xzr, [x28, #192]"
       ]
     },
     "vcvtps2ph xmm0, xmm1, 00000001b": {
-      "ExpectedInstructionCount": 6,
+      "ExpectedInstructionCount": 7,
       "Comment": [
         "-inf rounding",
         "Map 3 0b01 0x1D 128-bit"
       ],
       "ExpectedArm64ASM": [
         "mrs x20, fpcr",
-        "and x0, x20, #0xffffffffffbfffff",
+        "and x0, x20, #0xffffffffff3fffff",
         "orr x0, x0, #0x800000",
         "msr fpcr, x0",
         "fcvtn v16.4h, v17.4s",
-        "msr fpcr, x20"
+        "msr fpcr, x20",
+        "stp xzr, xzr, [x28, #192]"
       ]
     },
     "vcvtps2ph xmm0, xmm1, 00000010b": {
-      "ExpectedInstructionCount": 6,
+      "ExpectedInstructionCount": 7,
       "Comment": [
         "+inf rounding",
         "Map 3 0b01 0x1D 128-bit"
       ],
       "ExpectedArm64ASM": [
         "mrs x20, fpcr",
-        "and x0, x20, #0xffffffffff7fffff",
+        "and x0, x20, #0xffffffffff3fffff",
         "orr x0, x0, #0x400000",
         "msr fpcr, x0",
         "fcvtn v16.4h, v17.4s",
-        "msr fpcr, x20"
+        "msr fpcr, x20",
+        "stp xzr, xzr, [x28, #192]"
       ]
     },
     "vcvtps2ph xmm0, xmm1, 00000011b": {
-      "ExpectedInstructionCount": 5,
+      "ExpectedInstructionCount": 6,
       "Comment": [
         "truncate rounding",
         "Map 3 0b01 0x1D 128-bit"
@@ -2133,17 +2136,19 @@
         "orr x0, x20, #0xc00000",
         "msr fpcr, x0",
         "fcvtn v16.4h, v17.4s",
-        "msr fpcr, x20"
+        "msr fpcr, x20",
+        "stp xzr, xzr, [x28, #192]"
       ]
     },
     "vcvtps2ph xmm0, xmm1, 00000100b": {
-      "ExpectedInstructionCount": 1,
+      "ExpectedInstructionCount": 2,
       "Comment": [
         "host mode rounding",
         "Map 3 0b01 0x1D 128-bit"
       ],
       "ExpectedArm64ASM": [
-        "fcvtn v16.4h, v17.4s"
+        "fcvtn v16.4h, v17.4s",
+        "stp xzr, xzr, [x28, #192]"
       ]
     },
     "vcvtps2ph xmm0, ymm1, 00000000b": {
@@ -2174,7 +2179,7 @@
       "ExpectedArm64ASM": [
         "ldr q2, [x28, #208]",
         "mrs x20, fpcr",
-        "and x0, x20, #0xffffffffffbfffff",
+        "and x0, x20, #0xffffffffff3fffff",
         "orr x0, x0, #0x800000",
         "msr fpcr, x0",
         "fcvtn v3.4h, v17.4s",
@@ -2194,7 +2199,7 @@
       "ExpectedArm64ASM": [
         "ldr q2, [x28, #208]",
         "mrs x20, fpcr",
-        "and x0, x20, #0xffffffffff7fffff",
+        "and x0, x20, #0xffffffffff3fffff",
         "orr x0, x0, #0x400000",
         "msr fpcr, x0",
         "fcvtn v3.4h, v17.4s",
@@ -3488,7 +3493,7 @@
       ],
       "ExpectedArm64ASM": [
         "movi v2.2d, #0x0",
-        "ldr q3, [x28, #3232]",
+        "ldr q3, [x28, #3296]",
         "mov v16.16b, v17.16b",
         "aese v16.16b, v2.16b",
         "tbl v16.16b, {v16.16b}, v3.16b",
@@ -3502,7 +3507,7 @@
       ],
       "ExpectedArm64ASM": [
         "movi v2.2d, #0x0",
-        "ldr q3, [x28, #3232]",
+        "ldr q3, [x28, #3296]",
         "mov v16.16b, v17.16b",
         "aese v16.16b, v2.16b",
         "tbl v16.16b, {v16.16b}, v3.16b",

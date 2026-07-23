@@ -100,7 +100,7 @@ namespace ProductNames {
 #endif
 } // namespace ProductNames
 
-uint32_t GetCPUID_Syscall() {
+static uint32_t GetCPUID_Syscall() {
   uint32_t CPU {};
   FHU::Syscalls::getcpu(&CPU, nullptr);
   return CPU;
@@ -148,7 +148,7 @@ uint64_t GetCycleCounterFrequency() {
   return Result;
 }
 
-uint32_t GetCPUID_TPIDRRO() {
+static uint32_t GetCPUID_TPIDRRO() {
   uint64_t Result {};
   __asm("mrs %[Res], TPIDRRO_EL0" : [Res] "=r"(Result));
   return Result;
@@ -316,9 +316,8 @@ void CPUIDEmu::SetupHostHybridFlag() {
 
         // Walk our list of CPUMIDRs to find the most little core
         for (size_t j = LowestMIDRIdx; j < CPUMIDRs.size(); ++j) {
-          auto& MIDROption = CPUMIDRs[i];
+          const auto& MIDROption = CPUMIDRs[j];
           if ((MIDROption.Implementer == Implementer && MIDROption.Part == Part) || (MIDROption.Implementer == 0 && MIDROption.Part == 0)) {
-
             LowestMIDRIdx = j;
             LowestMIDR = MIDR;
             break;
@@ -650,6 +649,13 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_06h(uint32_t Leaf) const {
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_07h(uint32_t Leaf) const {
   FEXCore::CPUID::FunctionResults Res {};
   if (Leaf == 0) {
+#ifndef _WIN32
+    constexpr uint32_t SUPPORTS_RDPID = 1;
+#else
+    // RDPID under WIN32 is only supported if CPUIndex is available in TPIDRRO.
+    const uint32_t SUPPORTS_RDPID = SupportsCPUIndexInTPIDRRO;
+#endif
+
     // Disable Enhanced REP MOVS when TSO is enabled.
     // vcruntime140 memmove will use `rep movsb` in this case which completely destroys perf in Hades(appId 1145360)
     // This is due to LRCPC performance on Cortex being abysmal.
@@ -715,7 +721,7 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_07h(uint32_t Leaf) const {
               (0 << 19) |                               // MPX MAWAU
               (0 << 20) |                               // MPX MAWAU
               (0 << 21) |                               // MPX MAWAU
-              (1 << 22) |                               // RDPID Read Processor ID
+              (SUPPORTS_RDPID << 22) |                  // RDPID Read Processor ID
               (0 << 23) |                               // AES Key Locker
               (1 << 24) |                               // bus-lock-detect
               (0 << 25) |                               // CLDEMOTE

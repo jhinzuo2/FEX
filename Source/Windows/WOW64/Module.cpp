@@ -30,6 +30,7 @@ $end_info$
 
 #include "Windows/Common/Allocator.h"
 #include "Windows/Common/EnvironmentVariablesHandling.h"
+#include "Windows/Common/FEXUnixLib.h"
 #include "Common/CallRetStack.h"
 #include "Common/JITGuardPage.h"
 #include "Common/Config.h"
@@ -100,6 +101,10 @@ struct TLS {
   std::atomic<uint32_t>& ControlWord() const {
     // TODO: Change this when libc++ gains std::atomic_ref support
     return reinterpret_cast<std::atomic<uint32_t>&>(TEB->TlsSlots[FEXCore::ToUnderlying(Slot::CONTROL_WORD)]);
+  }
+
+  uint32_t* ControlWordAddress() const {
+    return reinterpret_cast<uint32_t*>(&TEB->TlsSlots[FEXCore::ToUnderlying(Slot::CONTROL_WORD)]);
   }
 
   CONTEXT*& EntryContext() const {
@@ -1015,16 +1020,15 @@ void BTCpuProcessInit() {
 
   SignalDelegator = fextl::make_unique<FEX::DummyHandlers::DummySignalDelegator>();
   SyscallHandler = fextl::make_unique<WowSyscallHandler>();
-  const auto NtDll = GetModuleHandle("ntdll.dll");
+  const auto NtDll = GetModuleHandleW(L"ntdll.dll");
   const bool IsWine = !!GetProcAddress(NtDll, "wine_get_version");
   OvercommitTracker.emplace(IsWine);
 
   FEX::Windows::Allocator::SetupHooks(NtDll);
+  FEX::Windows::UnixLib::Init(NtDll);
 
   {
-    auto HostFeatures = FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine);
-    // AVX is unsupported for WOW64
-    HostFeatures.SupportsAVX = false;
+    auto HostFeatures = FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine, FEXCore::HostFeatures::HostTypeEnum::Wow64);
     CTX = FEXCore::Context::Context::CreateNewContext(HostFeatures);
   }
 
@@ -1062,15 +1066,6 @@ void BTCpuProcessInit() {
 
   // wow64.dll will only initialise the cross-process queue if this is set
   GetTLS().Wow64Info().CpuFlags = WOW64_CPUFLAGS_SOFTWARE;
-
-  FEX_CONFIG_OPT(TSOEnabled, TSOENABLED);
-  if (TSOEnabled()) {
-    BOOL Enable = TRUE;
-    NTSTATUS Status = NtSetInformationProcess(NtCurrentProcess(), ProcessFexHardwareTso, &Enable, sizeof(Enable));
-    if (Status == STATUS_SUCCESS) {
-      CTX->SetHardwareTSOSupport(true);
-    }
-  }
 
   FEX_CONFIG_OPT(ProfileStats, PROFILESTATS);
   FEX_CONFIG_OPT(StartupSleep, STARTUPSLEEP);
@@ -1325,8 +1320,7 @@ NTSTATUS BTCpuSuspendLocalThread(HANDLE Thread, ULONG* Count) {
   }
 
   // Spin until the JIT is interrupted
-  while (TLS.ControlWord().load() & ControlBits::IN_JIT)
-    ;
+  FEXCore::Utils::SpinWaitLock::WaitBitMaskPred(TLS.ControlWordAddress(), ControlBits::IN_JIT, 0U, std::equal_to<>());
 
   // The JIT has now been interrupted and the context stored in the thread's CPU area is up-to-date
   if (Err = NtSuspendThread(*ThreadDup, Count); Err) {
@@ -1426,8 +1420,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   LogMan::Msg::DFmt("pc: {:X} eip: {:X}", Context->Pc, WowContext.Eip);
 
   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
-  *Exception = FEX::Windows::
-    HandleGuestException(Fault, Thread->CurrentFrame->SynchronousFaultAddress, *Exception, WowContext.Eip, WowContext.Eax);
+  *Exception = FEX::Windows::HandleGuestException(Fault, *Exception, WowContext.Eip, WowContext.Eax, WowContext.Ecx);
   if (Exception->ExceptionCode == EXCEPTION_SINGLE_STEP) {
     WowContext.EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
   }

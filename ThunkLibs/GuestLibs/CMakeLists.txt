@@ -87,11 +87,12 @@ function(generate NAME SOURCE_FILE)
 
   if (BITNESS EQUAL 32)
     set(BITNESS_FLAGS "-for-32bit-guest")
-    set(BITNESS_FLAGS2 "-m32" "--target=i686-linux-gnu" "-isystem" "/usr/i686-linux-gnu/include/")
+    set(BITNESS_FLAGS2 "-m32" "--target=i686-linux-gnu")
   else()
     set(BITNESS_FLAGS "")
-    set(BITNESS_FLAGS2 "--target=x86_64-linux-gnu" "-isystem" "/usr/x86_64-linux-gnu/include/")
+    set(BITNESS_FLAGS2 "--target=x86_64-linux-gnu")
   endif()
+  list(APPEND BITNESS_FLAGS2 "--sysroot" "${X86_DEV_ROOTFS}")
 
   add_custom_command(
     OUTPUT "${OUTFILE}"
@@ -265,3 +266,6 @@ add_library(PlaceholderX11 SHARED ../libX11/libX11_NativeGuest.cpp)
 target_link_options(PlaceholderX11 PRIVATE "LINKER:-soname,libX11.so.6")
 set_target_properties(PlaceholderX11 PROPERTIES NO_SONAME ON)
 target_link_libraries(GL-guest PRIVATE PlaceholderX11)
+
+generate(libcuda ${CMAKE_CURRENT_SOURCE_DIR}/../libcuda/libcuda_interface.cpp)
+add_guest_lib(cuda "libcuda.so.1")

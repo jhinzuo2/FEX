@@ -13,9 +13,6 @@ $end_info$
 
 namespace FEXCore::CPU {
 
-#define GRD(Node) (IROp->Size <= 4 ? GetDst<RA_32>(Node) : GetDst<RA_64>(Node))
-#define GRS(Node) (IROp->Size <= 4 ? GetReg<RA_32>(Node) : GetReg<RA_64>(Node))
-
 #define DEF_BINOP_WITH_CONSTANT(FEXOp, VarOp, ConstOp)                                    \
   DEF_OP(FEXOp) {                                                                         \
     auto Op = IROp->C<IR::IROp_##FEXOp>();                                                \
@@ -421,8 +418,8 @@ DEF_OP(MulH) {
   if (OpSize == IR::OpSize::i32Bit) {
     sxtw(TMP1, Src1.W());
     sxtw(TMP2, Src2.W());
-    mul(ARMEmitter::Size::i32Bit, Dst, TMP1, TMP2);
-    ubfx(ARMEmitter::Size::i32Bit, Dst, Dst, 32, 32);
+    mul(ARMEmitter::Size::i64Bit, Dst, TMP1, TMP2);
+    ubfx(ARMEmitter::Size::i64Bit, Dst, Dst, 32, 32);
   } else {
     smulh(Dst.X(), Src1.X(), Src2.X());
   }
@@ -523,7 +520,7 @@ DEF_OP(AndWithFlags) {
 }
 
 DEF_OP(AndShift) {
-  auto Op = IROp->C<IR::IROp_XorShift>();
+  auto Op = IROp->C<IR::IROp_AndShift>();
 
   and_(ConvertSize48(IROp), GetReg(Node), GetReg(Op->Src1), GetReg(Op->Src2), ConvertIRShiftType(Op->Shift), Op->ShiftAmount);
 }
@@ -721,7 +718,7 @@ DEF_OP(Extr) {
 }
 
 DEF_OP(PDep) {
-  auto Op = IROp->C<IR::IROp_PExt>();
+  auto Op = IROp->C<IR::IROp_PDep>();
   const auto EmitSize = ConvertSize48(IROp);
 
   const auto Dest = GetReg(Node);
@@ -774,7 +771,7 @@ DEF_OP(PDep) {
     // Now, they're copied, so we can start setting Dest (even if it overlaps with
     // one of them).  Handle early exit case
     mov(EmitSize, Dest, 0);
-    (void)cbz(EmitSize, OrigMask, &Done);
+    (void)cbz(EmitSize, Mask, &Done);
 
     // Setup for first iteration
     neg(EmitSize, T0, Mask);

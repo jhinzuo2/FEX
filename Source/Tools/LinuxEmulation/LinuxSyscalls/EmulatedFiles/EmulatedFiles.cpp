@@ -67,7 +67,7 @@ static void SealTmpFD(int fd) {
   }
 }
 
-fextl::string GenerateCPUInfo(FEXCore::Context::Context* ctx, uint32_t CPUCores) {
+static fextl::string GenerateCPUInfo(FEXCore::Context::Context* ctx, uint32_t CPUCores) {
   fextl::ostringstream cpu_stream {};
   auto res_0 = ctx->RunCPUIDFunction(0, 0);
   auto res_1 = ctx->RunCPUIDFunction(1, 0);
@@ -532,8 +532,8 @@ EmulatedFDManager::EmulatedFDManager(FEXCore::Context::Context* ctx)
     int FD = GenTmpFD(pathname, flags);
     uint32_t GuestVersion = FEX::HLE::_SyscallHandler->GetGuestKernelVersion();
     char Tmp[64] {};
-    snprintf(Tmp, sizeof(Tmp), "%d.%d.%d\n", FEX::HLE::SyscallHandler::KernelMajor(GuestVersion),
-             FEX::HLE::SyscallHandler::KernelMinor(GuestVersion), FEX::HLE::SyscallHandler::KernelPatch(GuestVersion));
+    snprintf(Tmp, sizeof(Tmp), "%d.%d.%d\n", FEX::LinuxVersion::KernelMajor(GuestVersion), FEX::LinuxVersion::KernelMinor(GuestVersion),
+             FEX::LinuxVersion::KernelPatch(GuestVersion));
     // + 1 to ensure null at the end
     write(FD, Tmp, strlen(Tmp) + 1);
     lseek(FD, 0, SEEK_SET);
@@ -548,8 +548,8 @@ EmulatedFDManager::EmulatedFDManager(FEXCore::Context::Context* ctx)
     const char kernel_version[] = "Linux version %d.%d.%d (FEX@FEX) (clang) #" GIT_DESCRIBE_STRING " SMP " __DATE__ " " __TIME__ "\n";
     uint32_t GuestVersion = FEX::HLE::_SyscallHandler->GetGuestKernelVersion();
     char Tmp[sizeof(kernel_version) + 64] {};
-    snprintf(Tmp, sizeof(Tmp), kernel_version, FEX::HLE::SyscallHandler::KernelMajor(GuestVersion),
-             FEX::HLE::SyscallHandler::KernelMinor(GuestVersion), FEX::HLE::SyscallHandler::KernelPatch(GuestVersion));
+    snprintf(Tmp, sizeof(Tmp), kernel_version, FEX::LinuxVersion::KernelMajor(GuestVersion), FEX::LinuxVersion::KernelMinor(GuestVersion),
+             FEX::LinuxVersion::KernelPatch(GuestVersion));
     // + 1 to ensure null at the end
     write(FD, Tmp, strlen(Tmp) + 1);
     lseek(FD, 0, SEEK_SET);

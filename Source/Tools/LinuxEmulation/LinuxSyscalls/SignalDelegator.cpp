@@ -64,16 +64,10 @@ static void SignalHandlerThunk(int Signal, siginfo_t* Info, void* UContext) {
   ThreadObject->SignalInfo.Delegator->HandleSignal(ThreadObject, Signal, Info, UContext);
 }
 
-uint64_t SigIsMember(GuestSAMask* Set, int Signal) {
+static uint64_t SigIsMember(GuestSAMask* Set, int Signal) {
   // Signal 0 isn't real, so everything is offset by one inside the set
   Signal -= 1;
   return (Set->Val >> Signal) & 1;
-}
-
-uint64_t SetSignal(GuestSAMask* Set, int Signal) {
-  // Signal 0 isn't real, so everything is offset by one inside the set
-  Signal -= 1;
-  return Set->Val | (1ULL << Signal);
 }
 
 /**
@@ -1220,7 +1214,7 @@ uint64_t SignalDelegator::GuestSigProcMask(FEX::HLE::ThreadStateObject* Thread, 
   // 3) Give old mask back
   auto OldSet = Thread->SignalInfo.CurrentSignalMask.Val;
 
-  if (!!set) {
+  if (set) {
     uint64_t IgnoredSignalsMask = ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     if (how == SIG_BLOCK) {
       Thread->SignalInfo.CurrentSignalMask.Val |= *set & IgnoredSignalsMask;
@@ -1245,7 +1239,7 @@ uint64_t SignalDelegator::GuestSigProcMask(FEX::HLE::ThreadStateObject* Thread, 
     ::syscall(SYS_rt_sigprocmask, SIG_SETMASK, &HostMask, nullptr, 8);
   }
 
-  if (!!oldset) {
+  if (oldset) {
     *oldset = OldSet;
   }
 
@@ -1318,11 +1312,7 @@ uint64_t SignalDelegator::GuestSigSuspend(FEX::HLE::ThreadStateObject* Thread, u
 }
 
 uint64_t SignalDelegator::GuestSigTimedWait(uint64_t* set, siginfo_t* info, const struct timespec* timeout, size_t sigsetsize) {
-  if (sigsetsize > sizeof(uint64_t)) {
-    return -EINVAL;
-  }
-
-  uint64_t Result = ::syscall(SYS_rt_sigtimedwait, set, info, timeout);
+  uint64_t Result = ::syscall(SYS_rt_sigtimedwait, set, info, timeout, sigsetsize);
 
   return Result == -1 ? -errno : Result;
 }

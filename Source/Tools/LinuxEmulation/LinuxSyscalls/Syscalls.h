@@ -8,6 +8,7 @@ $end_info$
 
 #pragma once
 
+#include "Common/Linux/LinuxVersion.h"
 #include "Common/VolatileMetadata.h"
 #include "LinuxSyscalls/FileManagement.h"
 #include "LinuxSyscalls/LinuxAllocator.h"
@@ -108,6 +109,8 @@ public:
 
   // does a guest munmap as if done via a guest syscall
   virtual uint64_t GuestMunmap(FEXCore::Core::InternalThreadState* Thread, void* addr, uint64_t length) = 0;
+
+  virtual void AddVirtualPage(FEXCore::Core::InternalThreadState* Thread, uint64_t addr, size_t length, int prot) = 0;
 };
 
 class SyscallHandler : public FEXCore::HLE::SyscallHandler,
@@ -208,25 +211,10 @@ public:
   }
 
   bool IsHostKernelVersionAtLeast(uint32_t Major, uint32_t Minor = 0, uint32_t Patch = 0) const {
-    return GetHostKernelVersion() >= KernelVersion(Major, Minor, Patch);
+    return GetHostKernelVersion() >= LinuxVersion::KernelVersion(Major, Minor, Patch);
   }
 
-  static uint32_t CalculateHostKernelVersion();
   uint32_t CalculateGuestKernelVersion();
-
-  static uint32_t KernelVersion(uint32_t Major, uint32_t Minor = 0, uint32_t Patch = 0) {
-    return (Major << 24) | (Minor << 16) | Patch;
-  }
-
-  static uint32_t KernelMajor(uint32_t Version) {
-    return Version >> 24;
-  }
-  static uint32_t KernelMinor(uint32_t Version) {
-    return (Version >> 16) & 0xFF;
-  }
-  static uint32_t KernelPatch(uint32_t Version) {
-    return Version & 0xFFFF;
-  }
 
   virtual FEX::HLE::MemAllocator* Get32BitAllocator() {
     return Alloc32Handler.get();
@@ -254,6 +242,10 @@ public:
   std::optional<LateApplyExtendedVolatileMetadata> TrackMmap(FEXCore::Core::InternalThreadState* Thread, uint64_t addr, size_t length,
                                                              int prot, int flags, int fd, off_t offset,
                                                              std::optional<FEXCore::ExecutableFileSectionInfo>& CachedSection);
+
+  void AddVirtualPage(FEXCore::Core::InternalThreadState* Thread, uint64_t addr, size_t length, int prot) override;
+  using SyscallMmapInterface::AddVirtualPage;
+
   void TrackMunmap(FEXCore::Core::InternalThreadState* Thread, void* addr, size_t length);
   void TrackMremap(FEXCore::Core::InternalThreadState* Thread, uint64_t OldAddress, size_t OldSize, size_t NewSize, int flags, uint64_t NewAddress);
   void TrackShmat(FEXCore::Core::InternalThreadState* Thread, int shmid, uint64_t shmaddr, int shmflg, uint64_t Length);

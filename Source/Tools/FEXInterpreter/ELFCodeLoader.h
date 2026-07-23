@@ -297,8 +297,8 @@ public:
 #ifndef AT_FLAGS_PRESERVE_ARGV0
 #define AT_FLAGS_PRESERVE_ARGV0 1
 #endif
-    uint32_t HostKernel = FEX::HLE::SyscallHandler::CalculateHostKernelVersion();
-    if ((HostKernel >= FEX::HLE::SyscallHandler::KernelVersion(5, 12, 0) && (AtFlags & AT_FLAGS_PRESERVE_ARGV0)) || LoadedWithFD) {
+    uint32_t HostKernel = FEX::LinuxVersion::CalculateHostKernelVersion();
+    if ((HostKernel >= FEX::LinuxVersion::KernelVersion(5, 12, 0) && (AtFlags & AT_FLAGS_PRESERVE_ARGV0)) || LoadedWithFD) {
 
       // Erase the initial argument from the list in this case
       ApplicationArgs.erase(ApplicationArgs.begin());
@@ -454,16 +454,16 @@ public:
     // On the upside, this more accurately emulates how the kernel allocates stack space for the application when hinting at the location.
     //
     void* StackPointerBase {};
-    auto VASize = FEXCore::Allocator::DetermineVASize();
+    auto VABits = FEXCore::Allocator::GetHostVABits();
     uint64_t StackHint {};
     if (Is64BitMode()) {
-      if (VASize > 47) {
+      if (VABits > 47) {
         // If VA size is at least as large as minimum x86 specification, then set to max.
-        VASize = 47;
+        VABits = 47;
       }
 
       // Calculate the highest point the stack could go.
-      StackHint = (1ULL << VASize) - FULL_STACK_SIZE;
+      StackHint = (1ULL << VABits) - FULL_STACK_SIZE;
     } else {
       // Needs to be under the 4GB VA space.
       StackHint = 0x1'0000'0000ULL - FULL_STACK_SIZE;
@@ -557,8 +557,8 @@ public:
       if (Is64BitMode()) {
         // Ensure that if we are running on a 36-bit VA system, we don't try hinting that an ELF should
         // live way outside the VA space.
-        uint64_t HostVASize = 1ULL << FEXCore::Allocator::DetermineVASize();
-        ELFLoadHint = std::min(HostVASize, TASK_SIZE_64) / 3 * 2;
+        uint64_t HostVABits = 1ULL << FEXCore::Allocator::GetHostVABits();
+        ELFLoadHint = std::min(HostVABits, TASK_SIZE_64) / 3 * 2;
       } else {
         ELFLoadHint = TASK_SIZE_32 / 3 * 2;
       }
@@ -645,6 +645,11 @@ public:
 
     if (Is64BitMode()) {
       AuxVariables.emplace_back(auxv_t {4, 0x38}); // AT_PHENT
+
+      // 64-bit vsyscall entry points are hardcoded to a single page at 0xffffffffff600000.
+      // FEX can't actually map anything there so it is a hardcoded quirk, similar to how the kernel traps these executions.
+      // Just track it as a mapped anonymous executable page.
+      Handler->AddVirtualPage(Thread, 0xFFFFFFFFFF600000ULL, FEXCore::Utils::FEX_PAGE_SIZE, PROT_READ | PROT_EXEC);
     } else {
       AuxVariables.emplace_back(auxv_t {4, 0x20}); // AT_PHENT
 

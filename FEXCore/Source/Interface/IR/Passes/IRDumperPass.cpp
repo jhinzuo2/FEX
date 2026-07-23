@@ -57,7 +57,7 @@ void IRDumper::Run(IREmitter* IREmit) {
   }
 
   if (FD.IsValid() || DumpToLog) {
-    fextl::stringstream out;
+    fextl::ostringstream out;
     FEXCore::IR::Dump(&out, &IR);
     if (FD.IsValid()) {
       fextl::fmt::print(FD, "IR-{} 0x{:x}:\n{}\n@@@@@\n", IR.PostRA() ? "post" : "pre", +HeaderOp->OriginalRIP, out.str());
@@ -67,7 +67,7 @@ void IRDumper::Run(IREmitter* IREmit) {
   }
 }
 
-fextl::unique_ptr<FEXCore::IR::Pass> CreateIRDumper() {
+fextl::unique_ptr<Pass> CreateIRDumper() {
   return fextl::make_unique<IRDumper>();
 }
 } // namespace FEXCore::IR::Debug
