@@ -64,10 +64,13 @@ private:
   FEXCore::Context::Context& CTX;
 
   FEX_CONFIG_OPT(ExtendedVolatileMetadataConfig, EXTENDEDVOLATILEMETADATA);
+  FEX_CONFIG_OPT(TSOWhitelistConfig, TSOWHITELIST);
   fextl::unordered_map<fextl::string, FEX::VolatileMetadata::ExtendedVolatileMetadata> ExtendedMetaData;
+  FEX::VolatileMetadata::TSOWhitelistConfig TSOWhitelist;
 
   std::shared_mutex ImagesLock;
   std::map<uint64_t, MappedImageInfo> MappedImages;
+  std::map<uint64_t, uint64_t> PersistentForceTSOMainImages;
   std::map<fextl::string, AOTImageInfo> AOTImages;
 
   std::string ActiveCodeMapPath;

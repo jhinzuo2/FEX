@@ -191,7 +191,16 @@ public:
    */
   FEX_DEFAULT_VISIBILITY virtual void AddForceTSOInformation(const IntervalList<uint64_t>& ValidRanges, fextl::set<uint64_t>&& Instructions) = 0;
 
+  /**
+   * @brief Adds a module-local TSO whitelist. Ordinary automatic TSO is disabled
+   * throughout ModuleRanges and re-enabled only in EnabledRanges or at Instructions.
+   */
+  FEX_DEFAULT_VISIBILITY virtual void AddTSOWhitelistInformation(const IntervalList<uint64_t>& ModuleRanges,
+                                                                 const IntervalList<uint64_t>& EnabledRanges,
+                                                                 fextl::set<uint64_t>&& Instructions) = 0;
+
   FEX_DEFAULT_VISIBILITY virtual void RemoveForceTSOInformation(uint64_t Address, uint64_t Size) = 0;
+  FEX_DEFAULT_VISIBILITY virtual void RemoveTSOWhitelistInformation(uint64_t Address, uint64_t Size) = 0;
 
   FEX_DEFAULT_VISIBILITY virtual void MarkMonoDetected() = 0;
 
