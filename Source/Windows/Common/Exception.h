@@ -11,7 +11,7 @@
 namespace FEX::Windows {
 template<typename TReg>
 static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault,
-                                                    const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax, TReg Cx) {
+                                                    const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax, TReg Cx, TReg FaultAddress) {
   EXCEPTION_RECORD Dst = Src;
   Dst.ExceptionAddress = reinterpret_cast<void*>(Rip);
 
