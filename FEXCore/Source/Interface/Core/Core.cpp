@@ -574,8 +574,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
       // block that contains them. Other block targets in the same multiblock
       // compilation unit are independent entry paths and must still emit all
       // of their instructions.
-      bool HadDispatchError {false};
-      bool HadInvalidInst {false};
+      //bool HadDispatchError {false};
+      //bool HadInvalidInst {false};
 
 #ifdef ZYDIS_DISASSEMBLER
       if (FEXCore::Config::Get_X86DISASSEMBLE() && CodeBlocks.size() > 1) {
@@ -584,7 +584,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 #endif
 
       const auto BlockForceTSO = Core::GetForceTSOBlockInfo(ForceTSOValidRanges, ForceTSOInstructions, Block.Entry, Block.Size);
-      const bool BlockInForceTSOValidRange = BlockForceTSO.InValidRange;
+      bool BlockInForceTSOValidRange = BlockForceTSO.InValidRange;
       auto InstForceTSOIt = ForceTSOInstructions.end();
       if (ForceTSOValidRanges.Contains({Block.Entry, Block.Entry + Block.Size})) {
         if (auto It = ForceTSOInstructions.lower_bound(Block.Entry); It != ForceTSOInstructions.end() && *It < Block.Entry + Block.Size) {
