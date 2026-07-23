@@ -14,13 +14,12 @@ jobs:
         fetch-depth: '0'
         fetch-tags: 'true'
 
-    - name: Install llvm-mingw (prebuilt release, no self-build)
+    - name: Install llvm-mingw
       run: |
         set -e
         cd "$HOME"
-        VER="$(curl -s https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+')"
         curl -L -o llvm-mingw.tar.xz \
-          "https://github.com/mstorsjo/llvm-mingw/releases/download/${VER}/llvm-mingw-${VER}-ucrt-ubuntu-22.04-aarch64.tar.xz"
+          "https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-aarch64.tar.xz"
         tar xf llvm-mingw.tar.xz
         mv llvm-mingw-*-aarch64 llvm-mingw
         echo "$HOME/llvm-mingw/bin" >> "$GITHUB_PATH"
